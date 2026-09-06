@@ -60,7 +60,13 @@ export async function POST() {
       const { data: prev } = await db()
         .from('style_samples').select('storage_path').eq('style', style).maybeSingle()
 
-      await db().from('style_samples').upsert({ style, url, storage_path: path })
+      // created_at is set explicitly. `default now()` only fires on INSERT, so on
+      // the ON CONFLICT DO UPDATE path it would keep the FIRST generation's date
+      // forever — and the teacher screen prints that date to answer "are these
+      // current?". A stale date there costs three real images to nobody's benefit.
+      await db()
+        .from('style_samples')
+        .upsert({ style, url, storage_path: path, created_at: new Date().toISOString() })
       if (prev?.storage_path) await deleteImages([prev.storage_path]).catch(() => {})
 
       results.push({ style, ok: true })
