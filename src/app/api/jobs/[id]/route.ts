@@ -17,6 +17,10 @@ const FAIL_COPY: Record<string, string> = {
   bad_request: '다시 한 번 해볼까요?',
   lease_expired: '그리다가 멈췄어요. 다시 한 번 해볼까요?',
   worker_error: '잠깐 문제가 생겼어요. 다시 한 번 해볼까요?',
+  // Set by the sweep in reap_expired_leases(): the job waited past its deadline
+  // without ever being claimed. The attempt was NOT charged, so this is an
+  // invitation to try again, not a dead end.
+  deadline_exceeded: '너무 오래 기다렸어요. 다시 한 번 해볼까요?',
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {

@@ -252,6 +252,61 @@ async function testFailureDoesNotCharge() {
     )
   }
 
+  // A job that ran out of time while still WAITING. claim_job() will not touch
+  // it (deadline_at <= now()), pump_worker() used to not even wake for it, and
+  // nothing moved it to 'failed' — so it sat as 'queued' forever, holding the
+  // student's attempt while their phone showed '그림을 그리고 있어요'.
+  // Its own device, because reap_expired_leases() also requeues the dead-lease
+  // job above in the same call — measuring on a shared device would net out.
+  const stranded = '77777777-7777-7777-7777-777777777777'
+  await admin.query(
+    `insert into devices (id, session_code, label) values ($1,'TEST','s')`, [stranded])
+  await admin.query(
+    `insert into jobs (session_code, device_id, idempotency_key, attempt_no, inputs, action_en, deadline_at)
+     values ('TEST',$1,'stranded',1,'{}'::jsonb,'x', now() - interval '1 minute')`, [stranded])
+
+  const beforeSweep = (await admin.query(`select used_quota('TEST',$1) as n`, [stranded])).rows[0].n
+  check('a job stuck past its deadline still holds the attempt', beforeSweep === 1, `used=${beforeSweep}`)
+
+  const stuck = await pool.query(`select * from claim_job(0, 10, 'fifo')`)
+  check(
+    'and can never be claimed, so no worker will ever finish it',
+    stuck.rows[0]?.idempotency_key !== 'stranded',
+    String(stuck.rows[0]?.idempotency_key ?? 'nothing claimed'),
+  )
+
+  await pool.query(`select reap_expired_leases()`)
+  const swept = await admin.query(
+    `select status, error_code from jobs where idempotency_key='stranded'`)
+  check(
+    'the sweep moves it to failed instead of leaving it stuck',
+    swept.rows[0].status === 'failed' && swept.rows[0].error_code === 'deadline_exceeded',
+    `${swept.rows[0].status}/${swept.rows[0].error_code}`,
+  )
+  const afterSweep = (await admin.query(`select used_quota('TEST',$1) as n`, [stranded])).rows[0].n
+  check(
+    'and hands the attempt back to the student',
+    afterSweep === 0,
+    `used ${beforeSweep} -> ${afterSweep}`,
+  )
+
+  // pg_cron has to wake for that row too, or the sweep only runs when some other
+  // piece of work happens to bring the worker up — which is exactly what is NOT
+  // happening when this bug bites.
+  await admin.query(
+    `insert into jobs (session_code, device_id, idempotency_key, attempt_no, inputs, action_en, deadline_at)
+     values ('TEST',$1,'expired-due',1,'{}'::jsonb,'x', now() - interval '1 minute')`, [device])
+  const due = await admin.query(`
+    select exists (
+      select 1 from jobs
+       where status = 'queued' and next_attempt_at <= now() and deadline_at > now()
+    ) or exists (
+      select 1 from jobs where status = 'running' and lease_expires_at < now()
+    ) or exists (
+      select 1 from jobs where status = 'queued' and deadline_at <= now()
+    ) as due`)
+  check('pump_worker considers an expired queued job due', due.rows[0].due === true)
+
   await admin.end()
 }
 
