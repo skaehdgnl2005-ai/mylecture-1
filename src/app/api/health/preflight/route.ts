@@ -90,7 +90,9 @@ export async function GET() {
     name: '대기열',
     ok: (queued ?? 0) === 0 && (running ?? 0) === 0,
     detail: `대기 ${queued ?? 0}개 · 진행 중 ${running ?? 0}개`,
-    fix: '지난 수업의 잔여 작업이에요. 교사 화면 > 대기열에서 정리할 수 있어요.',
+    // Names the button exactly. This row used to point at a 정리 feature that
+    // did not exist; if the button is ever renamed, rename it here too.
+    fix: "지난 수업의 잔여 작업이에요. 교사 화면 > 대기열 > '지난 수업 정리'를 눌러 주세요. 지금 수업이 열려 있다면 정상이에요.",
   })
 
   // 5. The pump. pg_net is fire-and-forget: a green cron run does NOT prove the

@@ -565,14 +565,77 @@ async function main() {
     String(drainedRow?.status),
   )
 
+  // ── 지난 수업 정리 ──────────────────────────────────────────────────────
+  // 수업 전 점검's 대기열 row has always told teachers to go and 정리 the
+  // leftovers; this is the action that makes that instruction true.
+  //
+  // The leftovers are made the way real ones are made: starting a new lesson
+  // hard-closes the previous one (POST /api/teacher/sessions), stranding
+  // whatever was still queued. Two jobs go in, the pacer holds the second for a
+  // full spacing interval, and the lesson is closed underneath it.
+  console.log('\n18. 지난 수업 정리')
+  const oldCode = (await api('/api/teacher/sessions', { method: 'POST' })).body.session as {
+    code: string
+  }
+  const held = await submit(oldCode.code, randomUUID(), '숲에서 사진을 찍어요', randomUUID())
+  const stranded = await submit(oldCode.code, randomUUID(), '카페에서 커피를 내려요', randomUUID())
+  check('two pictures are in the old lesson', held.body.ok === true && stranded.body.ok === true)
+
+  // Closes oldCode outright, exactly as a teacher starting the next class does.
+  const newCode = (await api('/api/teacher/sessions', { method: 'POST' })).body.session as {
+    code: string
+  }
+  const keep = await submit(newCode.code, randomUUID(), '무대에서 노래를 불러요', randomUUID())
+  check('and one is in the lesson that is open now', keep.body.ok === true)
+
+  const beforeSweep = (await api('/api/teacher/queue')).body.closedLeftovers as number
+  check('the queue screen counts the old lesson leftovers', beforeSweep > 0, String(beforeSweep))
+
+  const sweep = await api('/api/teacher/queue', {
+    method: 'POST', body: JSON.stringify({ action: 'sweep' }),
+  })
+  check('정리 reports what it cleared', sweep.body.ok === true && (sweep.body.swept as number) > 0, String(sweep.body.swept))
+
+  const afterJobs = (await api('/api/teacher/queue')).body.jobs as Array<{
+    id: string
+    status: string
+    error_code: string | null
+  }>
+  const strandedRow = afterJobs.find((j) => j.id === stranded.body.jobId)
+  check(
+    "the old lesson's leftover is failed, not deleted",
+    strandedRow?.status === 'failed' && strandedRow?.error_code === 'swept',
+    `${strandedRow?.status}/${strandedRow?.error_code}`,
+  )
+  // The one that matters: 정리 must be safe to press while a class is running.
+  const keptRow = afterJobs.find((j) => j.id === keep.body.jobId)
+  check(
+    'the OPEN lesson is untouched',
+    !!keptRow && keptRow.error_code !== 'swept',
+    `${keptRow?.status}/${keptRow?.error_code}`,
+  )
+  check(
+    'and 수업 전 점검 would now read zero leftovers',
+    ((await api('/api/teacher/queue')).body.closedLeftovers as number) === 0,
+  )
+
+  // A swept job is 'failed', and used_quota() excludes failed rows, so the
+  // student keeps the attempt. Same promise as every other failure path.
+  const strandedStatus = await api(`/api/jobs/${stranded.body.jobId}`)
+  check(
+    '  and the student keeps the attempt',
+    strandedStatus.body.quotaCharged === false,
+    String(strandedStatus.body.quotaCharged),
+  )
+
   // ── worker auth ────────────────────────────────────────────────────────
-  console.log('\n16. worker endpoint is not open')
+  console.log('\n19. worker endpoint is not open')
   const noSecret = await fetch(`${BASE}/api/worker/tick`, { method: 'POST' })
   check('worker tick requires the shared secret', noSecret.status === 401)
 
   // ── cleanup ────────────────────────────────────────────────────────────
-  console.log('\n17. cleanup')
-  for (const c of [CODE, LIVE]) {
+  console.log('\n20. cleanup')
+  for (const c of [CODE, LIVE, oldCode.code, newCode.code]) {
     const del = await api(`/api/teacher/sessions/${c}`, {
       method: 'DELETE', body: JSON.stringify({ confirm: c }),
     })

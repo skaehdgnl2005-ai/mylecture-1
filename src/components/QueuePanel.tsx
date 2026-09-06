@@ -37,6 +37,9 @@ export function QueuePanel() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [pump, setPump] = useState<Pump | null>(null)
   const [busy, setBusy] = useState('')
+  /** Jobs left over from lessons that are already closed — what 정리 clears. */
+  const [leftovers, setLeftovers] = useState(0)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const res = await fetch('/api/teacher/queue', { cache: 'no-store' })
@@ -44,6 +47,7 @@ export function QueuePanel() {
     const d = await res.json()
     setJobs(d.jobs ?? [])
     setPump(d.pump ?? null)
+    setLeftovers(d.closedLeftovers ?? 0)
   }, [])
 
   useEffect(() => {
@@ -67,6 +71,42 @@ export function QueuePanel() {
   }
 
   const stuck = jobs.filter((j) => j.status === 'queued').length
+
+  /**
+   * 지난 수업 정리 — the button 수업 전 점검's red 대기열 row points teachers at.
+   *
+   * This throws away student work, so it asks first and says the number out
+   * loud. It cannot touch a lesson that is open or draining (the route filters
+   * on status = 'closed'), which is what makes it safe to press at 8:50am with
+   * a class about to start — but the teacher has no way to know that from the
+   * button, so the question says it too.
+   */
+  const sweep = async () => {
+    if (
+      !confirm(
+        `지난 수업에 남아 있는 작업 ${leftovers}건을 정리할까요?\n그 그림들은 그려지지 않고 실패로 남아요. 지금 열려 있는 수업은 건드리지 않아요.`,
+      )
+    )
+      return
+    setBusy('sweep')
+    setNotice(null)
+    try {
+      const res = await fetch('/api/teacher/queue', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sweep' }),
+      })
+      const d = await res.json().catch(() => ({}))
+      setNotice(
+        res.ok && d.ok !== false
+          ? `${d.swept ?? 0}건을 정리했어요. 수업 전 점검을 다시 눌러 보세요.`
+          : (d.message ?? '정리하지 못했어요.'),
+      )
+      await load()
+    } finally {
+      setBusy('')
+    }
+  }
 
   return (
     <main className="mx-auto max-w-4xl space-y-5 p-5 pb-20">
@@ -110,10 +150,26 @@ export function QueuePanel() {
           >
             멈춘 작업 되돌리기
           </button>
+          <button
+            onClick={sweep}
+            disabled={busy === 'sweep' || leftovers === 0}
+            className="rounded-xl border-2 border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-700 disabled:opacity-40"
+          >
+            {busy === 'sweep' ? '정리하는 중…' : `지난 수업 정리${leftovers > 0 ? ` (${leftovers}건)` : ''}`}
+          </button>
           {stuck > 0 && (
             <span className="self-center text-sm text-amber-700">대기 {stuck}건</span>
           )}
         </div>
+
+        {notice && (
+          <div className="rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">{notice}</div>
+        )}
+
+        <p className="text-xs leading-relaxed text-gray-400">
+          &lsquo;지난 수업 정리&rsquo;는 이미 끝난 수업에 남은 작업만 없애요. 수업 전 점검의 대기열이
+          빨간불일 때 눌러 주세요.
+        </p>
       </section>
 
       <section className="overflow-hidden rounded-3xl bg-white">
