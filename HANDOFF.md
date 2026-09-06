@@ -5,32 +5,67 @@
 ---
 
 ```
-C:\dev\mylecture_1 의 "10년 뒤의 나" 웹앱을 이어서 작업합니다.
-README.md, RUNBOOK.md, PRD_10년뒤_나_그림생성_웹앱.md, HANDOFF.md 를 먼저 읽어주세요.
+C:\dev\mylecture_1 의 "10년 뒤의 나" 웹앱을 실제로 배포하고 수업 리허설까지 하려고 합니다.
+README.md, RUNBOOK.md, HANDOFF.md 를 먼저 읽어주세요. (PRD는 필요할 때만 — 기능은 이미 전부
+구현돼 있습니다.)
 
 ## 현재 상태
-Next.js 16 + Supabase + Vercel Hobby. 커밋 31개. PRD 전 기능 구현 + 화면 연결 완료.
+Next.js 16 + Supabase + Vercel Hobby. 커밋 32개. PRD 전 기능 구현 + 화면 연결 완료.
 로컬 검증 기준선: 단위 91 / API 스모크 86 / Playwright 19 / verify-gate SQL 불변식 —
 전부 PASS. 작업 후 이 숫자가 줄면 회귀입니다.
 
-## 지난 세션에 한 일
-1. 교사 설정에 **학생이 고를 수 있는 그림** · **화질** 추가.
-   화질 버튼에 장당 단가가 찍히고, 높음(약 4배)은 바꾸기 전에 물어봅니다.
-2. 대기열에 **지난 수업 정리**. 수업 전 점검의 빨간 안내가 가리키던 그 버튼입니다.
-3. medium 단가 $0.045 → **$0.041** (PRD가 맞았음). 단가는 이제 src/lib/pricing.ts
-   한 곳에만 있습니다.
-4. 결과 화면 '그림 저장하기'가 파일 준비 전에도 눌리던 것 수정.
-5. scripts/age-drift-grid.ts — RUNBOOK '수업 전날 5'의 24장 그리드.
-6. 마이그레이션 README가 7개 중 3개만 설명하던 것 + 없는 스크립트 참조 제거.
-7. e2e 로그인을 실행당 1회로 (분당 10회 제한을 스위트가 넘고 있었음).
+**코드는 끝났습니다. 이번 세션은 기능 추가가 아니라 실제 인프라에 올리는 세션입니다.**
+아래 1~3은 제 자격증명이 필요하니, 값을 어디서 가져와야 하는지 알려주시면 제가 붙여넣겠습니다.
 
-## 남은 후보 (사용자가 아직 고르지 않음)
-- **예상 비용이 화질 변경을 소급 적용합니다.** 교사 화면은 완료된 그림 전부를 세션의
-  '지금' 화질로 계산하므로, 수업 중에 low→high 로 바꾸면 이미 그린 그림 값까지 33배로
-  다시 매겨집니다. 정확히 하려면 jobs 행에 화질을 기록해야 하고 그건 마이그레이션입니다.
-  (lib/openai/image.ts 주석에 적어 뒀습니다.)
-- 세션 총 상한을 채운 뒤의 학생 화면 문구 검토
-- 갤러리 무한 스크롤 (지금은 전체 로드)
+## 이번 세션 작업 (순서대로)
+
+### 1. 실제 Supabase
+- `pnpm db:push` 로 마이그레이션 0007까지 적용
+- Storage에 **`drawings` 이름의 public 버킷** 생성
+- Vault 시크릿 2개 (SQL 편집기에서 한 번):
+    select vault.create_secret('<배포된 주소>', 'app_url');
+    select vault.create_secret('<WORKER_SECRET 값>', 'worker_secret');
+- Database > Extensions 에서 `pg_cron`, `pg_net` 활성화 확인
+- **Postgres 15.1.1.61 이상**이어야 `'10 seconds'` 스케줄이 동작합니다. 낮으면 업그레이드부터.
+
+### 2. Vercel 배포
+- 저장소는 **개인 GitHub 계정** 아래에 있어야 합니다. Hobby는 조직 소유 저장소에 연결이
+  안 됩니다.
+- `.env.example` 의 변수를 전부 Vercel 환경변수로 등록 (`MOCK_OPENAI` 은 **제외** —
+  프로덕션에 이게 켜져 있으면 학생 전원이 1x1 픽셀을 받습니다)
+- `CRON_SECRET` 을 하나 추가해야 vercel.json 의 일일 keep-alive cron이 동작합니다
+- **순서 주의**: 배포해야 실제 주소가 나옵니다. 그러니 1번의 Vault `app_url` 과 환경변수
+  `APP_URL` 은 **배포 뒤에 다시** 채워야 합니다. 이걸 놓치면 pg_cron이 조용히 아무 데도
+  요청을 보내지 않고, 증상은 "모두 대기에서 멈춤"으로만 보입니다.
+
+### 3. 프로덕션 점검
+- `/teacher` 로그인 → **수업 전 점검** 다섯 줄이 전부 초록인지
+- `pnpm check:limits` 로 계정의 진짜 분당 한도 확인 (Admin 키 `sk-admin-...` 필요).
+  `OPENAI_IPM` 환경변수와 다르면 환경변수를 고치고 재배포.
+- 학생 1명 흐름을 **손으로** 한 번 걸어보기 (그림 1장, 약 $0.04)
+
+> **scripts/smoke.ts 를 프로덕션 주소로 돌리지 마세요.** `MOCK_OPENAI` 는 서버 설정이라
+> 스크립트가 강제할 수 없습니다. 프로덕션에서 돌리면 진짜 그림을 10장 가까이 그려서 돈과
+> 분당 한도를 쓰고, 큐가 느려 drain 단계에서 어차피 실패합니다. 스모크는 로컬 전용입니다.
+
+### 4. 수업 전날 리허설 (RUNBOOK '수업 전날' 그대로)
+- 교사 화면 **스타일 예시 생성** 3장 (수업 중에는 절대 누르지 말 것)
+- `src/lib/safety/banned-words.ts` 금칙어 검토 — 우리 학교에서 요즘 쓰는 말 추가
+- `pnpm tsx scripts/age-drift-grid.ts --go` (약 $0.12, 6분 이상)
+  → `out/age-drift/index.html` 열어서 **25살이 고등학생처럼 나온 칸이 있는지** 눈으로 확인
+- `pnpm loadtest --code XXXX --n 20` — 마지막 GATE 세 줄이 전부 PASS여야 설정이 맞는 것
+
+### 5. 배포가 막히면 / 자격증명 기다리는 동안 할 코드 작업
+**예상 비용이 화질 변경을 소급 적용합니다.** 교사 화면은 완료된 그림 전부를 세션의 '지금'
+화질로 계산하므로, 수업 중에 low→high 로 바꾸면 이미 그린 그림 값까지 33배로 다시 매겨집니다.
+마이그레이션 0008로 `jobs` 행에 화질을 기록하고, `estimateCostUsd` 대신 행별 합계를 쓰면
+정확해집니다. (lib/openai/image.ts 주석에 KNOWN IMPRECISION 으로 적어 뒀습니다.)
+
+## 선생님이 결정하셔야 하는 것
+**Vercel Hobby는 계약상 비상업 전용입니다.** "제작에 관여한 누구든의 금전적 이득"이 정의에
+포함되어, 급여를 받는 교사가 업무에 쓰는 도구는 회색지대입니다. 위반 시 조치는 프로젝트
+일시정지(503)이고 자동 해제되지 않습니다 — **수업 중에 걸리면 복구가 안 됩니다.** Pro(월 $20)로
+올리거나 Vercel 지원팀에 문의하는 선택지가 있습니다. RUNBOOK '미리 알고 있어야 할 위험' 참고.
 
 ## 절대 되돌리면 안 되는 것들 (이유는 전부 코드 주석에)
 - claim_job() 의 `update pacer ... where id` — WHERE 빼면 Supabase의 pg-safeupdate가
@@ -58,14 +93,14 @@ Next.js 16 + Supabase + Vercel Hobby. 커밋 31개. PRD 전 기능 구현 + 화�
 - 브라우저에 Supabase 키 노출 금지(NEXT_PUBLIC_ 0개). moderation:'auto' 하드코딩 유지.
   archiver ^7 고정(@types ^6). 프롬프트 모듈은 클라이언트 import 금지.
 
-## 로컬 실행
+## 로컬 실행 (회귀 확인용)
 npx supabase start   # CLI 2.101.0이면 config.toml의 [local_smtp]를 못 읽습니다.
                      # CLI를 2.116+ 로 올리세요(그 줄을 [inbucket]으로 바꾸는 건 임시방편).
 pnpm db:push         # 0007까지 적용
 # Storage에 'drawings' public 버킷 (없으면 수업 전 점검이 알려줌)
 pnpm build && pnpm start
 pnpm test                        # 91
-pnpm tsx scripts/smoke.ts        # 86
+pnpm tsx scripts/smoke.ts        # 86  ← 로컬 전용. 프로덕션에 돌리지 말 것
 npx playwright test              # 19
 pnpm tsx scripts/verify-gate.ts  # 앱 서버를 끄고 돌릴 것
 
@@ -82,29 +117,22 @@ pnpm tsx scripts/verify-gate.ts  # 앱 서버를 끄고 돌릴 것
   (별도 request fixture를 쓰면 컨텍스트가 하나 더 생겨 로그인이 하나 더 나갑니다).
 - 커밋은 conventional commit(feat:/fix:/docs:/test:)으로 나눠서, 왜 그렇게 했는지를
   본문에 적어주세요. 이 저장소는 그 이유들이 자산입니다.
-
-## 아직 사람이 해야 하는 것 (자격증명 필요)
-- 실제 Supabase에 db:push (0007 포함) + 'drawings' 버킷 + Vault 시크릿 2개
-  (app_url, worker_secret)
-- Postgres 15.1.1.61 이상 / pg_cron·pg_net 활성 확인
-- Vercel 배포 (저장소는 개인 GitHub 계정 — Hobby는 조직 저장소 연결 불가)
-- pnpm check:limits 로 실제 IPM 확인 (Admin 키 필요)
-- 수업 전날: 교사 화면에서 스타일 예시 3장 생성, 금칙어 검토,
-  pnpm tsx scripts/age-drift-grid.ts --go 로 연령 드리프트 24장 확인 (약 $0.12)
+- **수업 중에는 배포하지 마세요.** git push 는 진행 중인 학생 작업을 흔듭니다.
 ```
 
 ---
 
 ## 이 프롬프트에 담은 것과 뺀 것
 
-**담은 것**: 새 세션이 모르면 같은 함정을 다시 밟게 되는 것들. 이번에 추가된 세 가지는
-전부 "코드만 봐서는 왜 그런지 알 수 없는" 것들입니다 — 정리 액션이 closed 세션에만
-걸리는 이유, /api/jobs 의 스타일 검증이 클라이언트 필터로 대체될 수 없는 이유,
-그리고 단가가 왜 server-only 가 아닌 파일에 있는지.
+**담은 것**: 배포 순서에서 한 번 틀리면 증상만으로는 원인을 못 찾는 것들 —
+`APP_URL`/Vault `app_url` 을 배포 후에 다시 채워야 한다는 것(안 하면 "모두 대기에서 멈춤"),
+프로덕션에 `MOCK_OPENAI` 가 켜지면 학생 전원이 1x1 픽셀을 받는다는 것, 그리고
+스모크를 프로덕션에 돌리면 진짜 돈이 나간다는 것. 마지막 항목은 스크립트가 스스로
+막을 수 없어서 — `MOCK_OPENAI` 는 서버 설정입니다 — 문서에 적는 것 말고는 방법이 없습니다.
 
-worker_lock 항목에 "서버 kill 직후 e2e를 돌리면 앞쪽 테스트가 실패한다"를 덧붙였습니다.
-이번 세션에 실제로 겪었고, 증상(그림이 안 나옴)과 원인(락)이 전혀 닮지 않아서
-한 번은 회귀로 오해했습니다.
+Vercel Hobby 비상업 조항을 "선생님이 결정하셔야 하는 것"으로 따로 뺐습니다. 기술적 선택이
+아니라 위험을 감수할지의 판단이고, 수업 중에 걸리면 그날은 복구가 안 됩니다.
 
-**뺀 것**: 아키텍처 설명. README에 있고, 새 세션이 읽으면 됩니다. 프롬프트에 중복으로 넣으면
-길어지기만 하고 README와 어긋날 위험이 생깁니다.
+**뺀 것**: 아키텍처 설명과 PRD 재확인. README에 있고, 기능은 이미 다 구현돼 있어서
+새 세션이 PRD를 처음부터 읽을 이유가 없습니다. 프롬프트에 중복으로 넣으면 길어지기만 하고
+README와 어긋날 위험이 생깁니다.
