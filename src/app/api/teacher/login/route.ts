@@ -17,9 +17,15 @@ export async function POST(req: Request) {
 
   const token = issueToken()
   const res = NextResponse.json({ ok: true })
+  // Keyed on the actual request protocol rather than NODE_ENV: `next start`
+  // runs with NODE_ENV=production, so a NODE_ENV check would mark the cookie
+  // Secure over plain http and silently break every local production-mode run
+  // (and the e2e suite with it). On Vercel this is always https.
+  const isHttps = new URL(req.url).protocol === 'https:'
+    || req.headers.get('x-forwarded-proto') === 'https'
   res.cookies.set(TEACHER_COOKIE, token.value, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isHttps,
     sameSite: 'lax',
     path: '/',
     maxAge: token.maxAge,
