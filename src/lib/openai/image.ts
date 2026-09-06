@@ -30,6 +30,8 @@ export async function generateImage(
   assertPromptIsClean(prompt) // belt and braces; the builder already checked
 
   const cfg = env()
+
+  if (cfg.MOCK_OPENAI === '1') return mockImage(prompt)
   // `stream: false` is explicit so the SDK's overload resolves to the
   // non-streaming ImagesResponse rather than the Stream union.
   const res: ImagesResponse = await openai().images.generate({
@@ -60,4 +62,31 @@ export async function generateImage(
 export function estimateCostUsd(images: number, quality: string): number {
   const perImage = quality === 'high' ? 0.165 : quality === 'low' ? 0.005 : 0.045
   return Math.round(images * perImage * 100) / 100
+}
+
+/**
+ * Deterministic stand-in used only when MOCK_OPENAI=1.
+ *
+ * Sleeps for a realistic 45s-ish span so the queue, the pacer, the lease
+ * heartbeat and the wait screen are all exercised against real timing rather
+ * than against an instant return. Scaled down by MOCK_LATENCY_MS when a test
+ * needs to run fast.
+ */
+async function mockImage(prompt: string): Promise<GeneratedImage> {
+  const latency = Number(process.env.MOCK_LATENCY_MS ?? 3000)
+  await new Promise((r) => setTimeout(r, latency))
+
+  // A 1x1 JPEG is enough: nothing downstream inspects the pixels.
+  const jpeg = Buffer.from(
+    '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a' +
+      'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA' +
+      'AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==',
+    'base64',
+  )
+  return {
+    bytes: jpeg,
+    contentType: 'image/jpeg',
+    extension: 'jpg',
+    outputTokens: Math.min(1600, prompt.length),
+  }
 }

@@ -45,6 +45,14 @@ const schema = z.object({
   POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(2500),
   GALLERY_POLL_MS: z.coerce.number().int().min(1000).default(5000),
 
+  /**
+   * Test affordance. When '1', the OpenAI clients return canned results instead
+   * of calling the API. Used by the e2e suite and by a dry-run rehearsal, so a
+   * full 20-student walkthrough costs nothing and does not consume the class's
+   * images-per-minute budget. Never set in production.
+   */
+  MOCK_OPENAI: z.enum(['0', '1']).default('0'),
+
   DEFAULT_PER_DEVICE_LIMIT: z.coerce.number().int().min(1).max(10).default(2),
   DEFAULT_TOTAL_LIMIT: z.coerce.number().int().min(1).max(500).default(50),
 })

@@ -85,6 +85,14 @@ function validate(raw: unknown, maxWords: number): TranslateResult {
 async function run(system: string, text: string, maxWords: number): Promise<TranslateResult> {
   if (!text.trim()) return { ok: false, phrase: '', reason: 'empty_or_nonsense' }
 
+  if (env().MOCK_OPENAI === '1') {
+    // Keeps the shape and the ASCII/word-count guarantees without a network call.
+    if (/^[^가-힣a-zA-Z]+$/.test(text.trim())) {
+      return { ok: false, phrase: '', reason: 'empty_or_nonsense' }
+    }
+    return { ok: true, phrase: 'doing something they love, hands busy', reason: 'ok' }
+  }
+
   const res = await openai().chat.completions.create({
     model: env().TRANSLATE_MODEL,
     messages: [

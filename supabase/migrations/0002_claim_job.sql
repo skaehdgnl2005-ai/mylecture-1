@@ -86,9 +86,13 @@ begin
     return null;                                   -- no work: do NOT burn a slot
   end if;
 
+  -- `where id` is not decoration: Supabase enables the pg-safeupdate extension,
+  -- which rejects any UPDATE without a WHERE clause ("UPDATE requires a WHERE
+  -- clause"). Plain Postgres accepts it, so this only fails on the real thing.
   update pacer
      set next_slot_at = greatest(v_now, v_slot)
-                      + make_interval(secs => p_spacing_ms / 1000.0);
+                      + make_interval(secs => p_spacing_ms / 1000.0)
+   where id;
 
   update jobs
      set status = 'running',

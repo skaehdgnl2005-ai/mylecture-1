@@ -27,6 +27,10 @@ export async function moderateFields(fields: string[]): Promise<ModerationVerdic
   const nonEmpty = fields.map((f) => f.trim())
   if (nonEmpty.every((f) => f.length === 0)) return { ok: true }
 
+  // MOCK_OPENAI leaves layer 1 (the deterministic word list) fully active, so
+  // safety behaviour is still exercised end to end — only the network call goes.
+  if (env().MOCK_OPENAI === '1') return { ok: true }
+
   const res = await openai().moderations.create({
     model: env().MODERATION_MODEL,
     input: nonEmpty.map((f) => (f.length ? f : ' ')),

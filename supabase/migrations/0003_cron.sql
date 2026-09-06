@@ -83,4 +83,7 @@ $cron$);
 
 -- Reap dead workers even if no HTTP pump is running.
 select cron.unschedule('reap-leases') where exists (select 1 from cron.job where jobname = 'reap-leases');
-select cron.schedule('reap-leases', '1 minute', $cron$ select reap_expired_leases(); $cron$);
+-- NOTE: pg_cron accepts the interval string form only for SUB-minute schedules
+-- ('10 seconds'). Anything a minute or longer must use standard cron syntax —
+-- '1 minute' is rejected with "invalid schedule".
+select cron.schedule('reap-leases', '* * * * *', $cron$ select reap_expired_leases(); $cron$);
