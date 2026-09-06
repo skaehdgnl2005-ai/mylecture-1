@@ -113,6 +113,7 @@ export async function GET() {
   checks.push(pump)
 
   const ipm = cfg.OPENAI_IPM
+  const forty = Math.round((40 / (ipm * 0.92)) * 10) / 10
   return NextResponse.json({
     ok: checks.every((c) => c.ok),
     checks,
@@ -127,11 +128,14 @@ export async function GET() {
     },
     // The number the teacher must see BEFORE the lesson, not during it.
     expectations: {
-      fortyImagesMinutes: Math.round((40 / (ipm * 0.92)) * 10) / 10,
+      fortyImagesMinutes: forty,
+      // The teacher screen prints this note directly under the big number, so
+      // the two must agree. A hard-coded '약 9분' is only true at IPM=5; at
+      // IPM=3 the hero would read 14.5 with '9분' beneath it.
       note:
         ipm <= 5
-          ? '40장을 모두 그리는 데 약 9분이 걸려요. 화질을 낮춰도 줄어들지 않아요(한도가 장수 기준이라서요). 수업 시간은 15분을 잡아 주세요.'
-          : `40장을 모두 그리는 데 약 ${Math.round((40 / (ipm * 0.92)) * 10) / 10}분이 걸려요.`,
+          ? `40장을 모두 그리는 데 약 ${forty}분이 걸려요. 화질을 낮춰도 줄어들지 않아요(한도가 장수 기준이라서요). 수업 시간은 ${Math.ceil(forty) + 6}분을 잡아 주세요.`
+          : `40장을 모두 그리는 데 약 ${forty}분이 걸려요.`,
     },
   })
 }
