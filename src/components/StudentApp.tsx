@@ -150,6 +150,14 @@ export function StudentApp({
         })
         const d = await res.json()
 
+        // The teacher can switch a style off mid-lesson, and this phone read the
+        // list once, when it joined. The server sends the current list back with
+        // its refusal so step 5 loses the dead card immediately — otherwise the
+        // student taps 그림 그리기 on the same card and is refused again.
+        if (Array.isArray(d.allowedStyles)) {
+          setInfo((p) => (p ? { ...p, allowedStyles: d.allowedStyles } : p))
+        }
+
         if (d.ok) {
           setJobId(d.jobId)
           setPosition(1)

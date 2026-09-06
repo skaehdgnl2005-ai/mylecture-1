@@ -394,8 +394,111 @@ async function main() {
     !JSON.stringify(queueJobs).includes('노래해요'),
   )
 
+  // ── 사용 가능 스타일 ────────────────────────────────────────────────────
+  // The teacher setting is worth nothing unless the SERVER honours it: every
+  // phone in the room read allowed_styles once, when it joined, so a client-side
+  // filter alone leaves the change doing nothing for the whole class.
+  console.log('\n14. 사용 가능 스타일')
+  const styleDevice = randomUUID()
+  const joinBefore = await api('/api/session/join', {
+    method: 'POST', body: JSON.stringify({ code: LIVE, deviceId: styleDevice }),
+  })
+  const usedBefore = (joinBefore.body.usage as { used: number }).used
+
+  const restrict = await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ allowedStyles: ['anime'] }),
+  })
+  check('teacher can restrict which styles students may pick', restrict.body.ok === true)
+
+  const joinAfter = await api('/api/session/join', {
+    method: 'POST', body: JSON.stringify({ code: LIVE, deviceId: randomUUID() }),
+  })
+  check(
+    '  a phone joining now sees only the allowed ones',
+    JSON.stringify((joinAfter.body.session as { allowedStyles: string[] }).allowedStyles) === '["anime"]',
+  )
+
+  const offStyle = await submit(LIVE, styleDevice, '공방에서 그릇을 빚어요', randomUUID(), {
+    style: 'watercolor',
+  })
+  check(
+    'a switched-off style is refused rather than silently drawn',
+    offStyle.body.reason === 'style_disabled',
+    String(offStyle.body.reason),
+  )
+  check(
+    '  and the refusal carries the current list, so step 5 drops the dead card',
+    JSON.stringify(offStyle.body.allowedStyles) === '["anime"]',
+    JSON.stringify(offStyle.body.allowedStyles),
+  )
+  check('  the refusal is a 200, not an error status', offStyle.status === 200)
+  check('  quota not charged', offStyle.body.quotaCharged === false)
+
+  const joinAfterRefusal = await api('/api/session/join', {
+    method: 'POST', body: JSON.stringify({ code: LIVE, deviceId: styleDevice }),
+  })
+  check(
+    '  and the attempt really is still there',
+    (joinAfterRefusal.body.usage as { used: number }).used === usedBefore,
+    `used ${usedBefore} -> ${(joinAfterRefusal.body.usage as { used: number }).used}`,
+  )
+
+  const onStyle = await submit(LIVE, styleDevice, '공방에서 의자를 만들어요', randomUUID(), {
+    style: 'anime',
+  })
+  check('an allowed style still goes through', onStyle.body.ok === true, String(onStyle.body.message ?? ''))
+
+  const noStyles = await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ allowedStyles: [] }),
+  })
+  check('the last style cannot be switched off', noStyles.status === 400)
+
+  await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ allowedStyles: ['anime', 'photo', 'watercolor'] }),
+  })
+
+  // ── 화질 ───────────────────────────────────────────────────────────────
+  // The per-image prices are pinned here on purpose. `medium` was $0.045 in the
+  // code and $0.041 in the PRD; OpenAI's list says $0.041, and this is what
+  // stops the wrong one drifting back in — the teacher's 예상 비용 and the price
+  // printed on the 화질 buttons are both this constant.
+  console.log('\n15. 화질')
+  const doneNow = ((await api('/api/teacher/sessions')).body.stats as { done: number }).done
+
+  const toHigh = await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ imageQuality: 'high' }),
+  })
+  check(
+    'teacher can change the image quality',
+    (toHigh.body.session as { image_quality: string })?.image_quality === 'high',
+    String((toHigh.body.session as { image_quality: string })?.image_quality),
+  )
+  const highCost = ((await api('/api/teacher/sessions')).body.stats as { estimatedCostUsd: number })
+    .estimatedCostUsd
+  check(
+    '  예상 비용 uses $0.165 per image at high',
+    highCost === Math.round(doneNow * 0.165 * 100) / 100,
+    `${highCost} for ${doneNow} images`,
+  )
+
+  await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ imageQuality: 'medium' }),
+  })
+  const medCost = ((await api('/api/teacher/sessions')).body.stats as { estimatedCostUsd: number })
+    .estimatedCostUsd
+  check(
+    '  and $0.041 at medium (PRD §5-2, not the $0.045 the code used to carry)',
+    medCost === Math.round(doneNow * 0.041 * 100) / 100,
+    `${medCost} for ${doneNow} images`,
+  )
+
+  const badQuality = await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ imageQuality: 'ultra' }),
+  })
+  check('an unknown quality is refused', badQuality.status === 400)
+
   // ── session cap ────────────────────────────────────────────────────────
-  console.log('\n14. session cap')
+  console.log('\n16. session cap')
   await api(`/api/teacher/sessions/${LIVE}`, {
     method: 'PATCH', body: JSON.stringify({ totalLimit: 1 }),
   })
@@ -407,8 +510,8 @@ async function main() {
   )
 
   // ── draining ───────────────────────────────────────────────────────────
-  console.log('\n15. 수업 닫기 drains instead of discarding')
-  // Section 14 pinned the session cap at 1 to prove the refusal. Lift it again,
+  console.log('\n17. 수업 닫기 drains instead of discarding')
+  // Section 16 pinned the session cap at 1 to prove the refusal. Lift it again,
   // or this section measures that instead of what it means to.
   await api(`/api/teacher/sessions/${LIVE}`, {
     method: 'PATCH', body: JSON.stringify({ totalLimit: 50 }),

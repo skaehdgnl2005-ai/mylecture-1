@@ -60,8 +60,14 @@ export async function deleteSession(request: APIRequestContext, code: string) {
   await request.delete(`/api/teacher/sessions/${code}`, { data: { confirm: code } })
 }
 
-/** Walks the 5-step form with valid answers and taps 그림 그리기. */
-export async function fillForm(page: Page, text = '내가 만든 게임을 친구들과 해요') {
+/**
+ * Answers questions 1-4 and stops ON step 5, with no style picked yet.
+ *
+ * Split out of fillForm so a test can do something between arriving at the
+ * style cards and submitting — which is the only window in which a teacher
+ * switching a style off can catch a student mid-form.
+ */
+export async function fillFormToStyleStep(page: Page, text = '내가 만든 게임을 친구들과 해요') {
   await page.getByPlaceholder('예)').fill(text)
   await page.getByRole('button', { name: '다음' }).click()
 
@@ -74,7 +80,11 @@ export async function fillForm(page: Page, text = '내가 만든 게임을 친�
   await page.getByRole('checkbox', { name: '설레는' }).click()
   await page.getByRole('checkbox', { name: '노을' }).click()
   await page.getByRole('button', { name: '다음' }).click()
+}
 
+/** Walks the 5-step form with valid answers and taps 그림 그리기. */
+export async function fillForm(page: Page, text = '내가 만든 게임을 친구들과 해요') {
+  await fillFormToStyleStep(page, text)
   await page.getByRole('button', { name: /애니메이션/ }).click()
   await page.getByRole('button', { name: '그림 그리기' }).click()
 }

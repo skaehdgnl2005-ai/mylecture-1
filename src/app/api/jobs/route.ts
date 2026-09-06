@@ -65,6 +65,28 @@ export async function POST(req: Request) {
     )
   }
 
+  // A style the teacher switched off after this phone joined.
+  //
+  // StudentApp reads allowed_styles ONCE, at join, and the zod enum above
+  // accepts all three regardless — so without this check, unchecking 실사
+  // mid-lesson would do nothing for every phone already in the room, which in a
+  // 15-minute lesson is all of them. The setting has to mean something at the
+  // moment it is changed or it should not be a setting.
+  //
+  // Shaped like a safety rejection, deliberately: 200, no job row, nothing
+  // charged, and the fresh list rides back so the student's step 5 drops the
+  // dead card instead of refusing the same tap forever.
+  if (!session.allowed_styles.includes(b.style)) {
+    await logEvent('style_disabled', { sessionCode: code, detail: { style: b.style } })
+    return NextResponse.json({
+      ok: false,
+      reason: 'style_disabled',
+      allowedStyles: session.allowed_styles,
+      message: '선생님이 이 그림은 잠시 껐어요.\n다른 그림으로 골라 주세요.',
+      quotaCharged: false,
+    })
+  }
+
   // ── Safety layers 1-3, per field, BEFORE any job row exists ──────────────
   const safety = await runSafetyPipeline({
     rawText: b.rawText,

@@ -78,6 +78,19 @@ export function StepForm({
     lastError.current = error
   }, [error])
 
+  // A style the teacher switched off while this form was open.
+  //
+  // The card vanishes from step 5 the moment the list changes, so a selection
+  // still pointing at it would leave 그림 그리기 enabled on a choice the student
+  // can no longer see — and the server refuses that submission. Clearing it
+  // disables the button until they pick again, which IS the message.
+  //
+  // Returning `prev` unchanged when there is nothing to clear matters: the
+  // parent rebuilds this array on some renders, so this effect re-runs often.
+  useEffect(() => {
+    setV((prev) => (prev.style && !allowedStyles.includes(prev.style) ? { ...prev, style: '' } : prev))
+  }, [allowedStyles])
+
   const canAdvance = [
     v.rawText.trim().length > 0,
     v.place !== '',

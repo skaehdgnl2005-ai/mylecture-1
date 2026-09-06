@@ -6,6 +6,8 @@ import { clsx } from 'clsx'
 import { PreflightPanel } from './PreflightPanel'
 import { DevicePanel, type TeacherDevice } from './DevicePanel'
 import { StyleSamplePanel } from './StyleSamplePanel'
+import { STYLE_CARDS } from '@/lib/chips'
+import { IMAGE_COST_USD, type ImageQuality } from '@/lib/pricing'
 
 interface Session {
   code: string
@@ -40,6 +42,20 @@ interface ImageRow {
   device_id: string
   deviceLabel?: string
 }
+
+/** Same Korean words the 수업 전 점검 panel uses for the same three values. */
+const QUALITIES: ReadonlyArray<{ id: ImageQuality; ko: string }> = [
+  { id: 'low', ko: '낮음' },
+  { id: 'medium', ko: '보통' },
+  { id: 'high', ko: '높음' },
+]
+
+/** A class is 40 pictures (PRD §5-2, and the number every other screen quotes). */
+const CLASS_IMAGES = 40
+const forty = (q: ImageQuality) => (IMAGE_COST_USD[q] * CLASS_IMAGES).toFixed(2)
+
+// Derived, not typed as "4": if the price table moves, the warning moves with it.
+const highMultiple = Math.round(IMAGE_COST_USD.high / IMAGE_COST_USD.medium)
 
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: 'warn' | 'bad' }) {
   return (
@@ -164,6 +180,51 @@ export function TeacherConsole() {
         }),
       'patch',
     )
+
+  // ── 사용 가능 스타일 ────────────────────────────────────────────────────────
+  // Rebuilt in STYLE_CARDS order rather than by appending, so the array the
+  // students' step 5 renders from keeps a stable order across toggles.
+  const toggleStyle = (id: string) => {
+    if (!active) return
+    const on = active.allowed_styles.includes(id)
+    const next = STYLE_CARDS.filter((s) => (s.id === id ? !on : active.allowed_styles.includes(s.id))).map(
+      (s) => s.id,
+    )
+    // The PATCH schema is .min(1). Refusing here — rather than letting the
+    // server 400 — is the difference between "you have to keep one" and "the
+    // app is broken", five minutes before a lesson.
+    if (next.length === 0) {
+      setNotice('그림은 하나 이상 켜 두어야 해요.')
+      return
+    }
+    // Turning one OFF during a live lesson bounces students who already picked
+    // it, so say so first. Turning one back ON costs nobody anything.
+    if (on && active.status === 'open') {
+      const label = STYLE_CARDS.find((s) => s.id === id)?.ko ?? id
+      if (
+        !confirm(
+          `'${label}'을(를) 끌까요?\n이 그림을 이미 고른 학생은 '그림 그리기'를 누를 때 다시 고르라는 안내를 받아요. 답변은 지워지지 않아요.`,
+        )
+      )
+        return
+    }
+    patch({ allowedStyles: next })
+  }
+
+  // ── 화질 ───────────────────────────────────────────────────────────────────
+  // The only setting on this screen that multiplies the bill, so 높음 is the
+  // one that asks. The numbers come from the price table, not from prose.
+  const setQuality = (q: ImageQuality) => {
+    if (!active || active.image_quality === q) return
+    if (
+      q === 'high' &&
+      !confirm(
+        `그림 한 장이 $${IMAGE_COST_USD.medium.toFixed(3)} 에서 $${IMAGE_COST_USD.high.toFixed(3)} 로, 약 ${highMultiple}배가 돼요.\n${CLASS_IMAGES}장이면 약 $${forty('medium')} 에서 약 $${forty('high')} 예요. 높음으로 바꿀까요?`,
+      )
+    )
+      return
+    patch({ imageQuality: q })
+  }
 
   const toggleHide = (img: ImageRow) =>
     call(
@@ -364,6 +425,87 @@ export function TeacherConsole() {
               &lsquo;모두 1장씩 먼저&rsquo;로 바꾸면 마지막 학생이 첫 그림을 받는 시간이 약 9분에서 약 5분으로 줄어요.
               전체가 끝나는 시간은 같아요.
             </p>
+
+            {/* ── 사용 가능 스타일 (PRD §F4) ─────────────────────────────────
+                Labels come from STYLE_CARDS, never hand-typed: chips.test.ts
+                pins that list to the server's prompt dictionary, so a style
+                renamed in one place cannot end up renamed only here. ── */}
+            <div className="space-y-2 border-t border-gray-100 pt-4">
+              <span className="text-sm text-gray-500">학생이 고를 수 있는 그림</span>
+              <div className="flex flex-wrap gap-2">
+                {STYLE_CARDS.map((s) => {
+                  const on = active.allowed_styles.includes(s.id)
+                  const last = on && active.allowed_styles.length === 1
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => toggleStyle(s.id)}
+                      disabled={busy === 'patch'}
+                      className={clsx(
+                        'rounded-xl border-2 px-4 py-2.5 text-sm font-semibold',
+                        on ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-gray-200 text-gray-500',
+                        last && 'opacity-70',
+                      )}
+                    >
+                      {on ? '✓ ' : ''}
+                      {s.ko}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-xs leading-relaxed text-gray-400">
+                끄면 새로 들어오는 학생에게는 그 그림이 안 보여요. 이미 그 그림을 고른 학생은
+                &lsquo;그림 그리기&rsquo;를 누를 때 다시 고르라는 안내를 받고, 답변은 그대로 남아요.
+                하나는 켜 두어야 해요.
+              </p>
+            </div>
+
+            {/* ── 화질 ──────────────────────────────────────────────────────
+                The price is printed ON the buttons. 높음 costs about four
+                times 보통, and a teacher who finds that out from the invoice
+                found out too late — so the number is never more than one
+                glance from the control that changes it. ── */}
+            <div className="space-y-2 border-t border-gray-100 pt-4">
+              <span className="text-sm text-gray-500">화질</span>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {QUALITIES.map((q) => {
+                  const on = active.image_quality === q.id
+                  return (
+                    <button
+                      key={q.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => setQuality(q.id)}
+                      disabled={busy === 'patch'}
+                      className={clsx(
+                        'rounded-xl border-2 px-4 py-2.5 text-left',
+                        on ? 'border-brand-500 bg-brand-50' : 'border-gray-200',
+                      )}
+                    >
+                      <div className={clsx('text-sm font-semibold', on ? 'text-brand-700' : 'text-gray-700')}>
+                        {on ? '✓ ' : ''}
+                        {q.ko}
+                      </div>
+                      <div className="mt-0.5 text-xs tabular-nums text-gray-500">
+                        장당 ${IMAGE_COST_USD[q.id].toFixed(3)} · 40장 ${forty(q.id)}
+                      </div>
+                      {q.id === 'high' && (
+                        <div className="mt-0.5 text-xs font-semibold text-red-600">
+                          보통의 약 {highMultiple}배
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-xs leading-relaxed text-gray-400">
+                지금 그리는 중인 그림은 원래 화질로 끝나고, 대기 중인 그림부터 새 화질로 그려요.
+                <br />
+                화질을 낮춰도 빨라지지는 않아요 — 분당 한도가 장수 기준이라서요.
+              </p>
+            </div>
           </section>
 
           <section className="space-y-4 rounded-3xl bg-white p-6">
