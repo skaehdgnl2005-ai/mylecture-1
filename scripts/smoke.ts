@@ -199,7 +199,7 @@ async function main() {
   check('restore brings it back', (restored.body.items as Array<{ id: string }>).some((i) => i.id === first.id))
 
   // ── student removes own ────────────────────────────────────────────────
-  console.log('\n9. student removes their own picture')
+  console.log('\n9. student takes their own picture down, and puts it back')
   const notMine = await fetch(`${BASE}/api/gallery/image/${first.id}`, {
     method: 'DELETE',
     headers: { 'content-type': 'application/json' },
@@ -207,8 +207,195 @@ async function main() {
   })
   check('another device cannot remove it', notMine.status === 404)
 
+  // Which pictures belong to this device? (POST, so the device UUID never lands
+  // in an access log — see the route header.)
+  const mine = async (deviceId: string) =>
+    api(`/api/gallery/${LIVE}/mine`, { method: 'POST', body: JSON.stringify({ deviceId }) })
+
+  const ownedBefore = await mine(dev2)
+  const owned = ownedBefore.body.items as Array<{ id: string; url: string; inGallery: boolean }>
+  check('a device can list its own pictures', owned.length > 0, `${owned.length} owned`)
+  const ownedKeys = new Set(owned.flatMap((o) => Object.keys(o)))
+  check(
+    '  and gets ONLY id/url/inGallery',
+    // The length guard is not decoration: `every` on an empty set is true, so
+    // without it this check would pass loudest exactly when the route is broken.
+    ownedKeys.size === 3 && [...ownedKeys].every((k) => ['id', 'url', 'inGallery'].includes(k)),
+    [...ownedKeys].join(','),
+  )
+  const strangerOwned = await mine(randomUUID())
+  check(
+    '  an unknown device gets an empty list, not a 404 (no existence oracle)',
+    strangerOwned.status === 200 && (strangerOwned.body.items as unknown[]).length === 0,
+    `status=${strangerOwned.status}`,
+  )
+  check(
+    '  the ownership lookup never reveals which device owns a picture',
+    !JSON.stringify(ownedBefore.body).includes('device'),
+  )
+
+  const target = owned[0].id
+  const removed = await fetch(`${BASE}/api/gallery/image/${target}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deviceId: dev2 }),
+  })
+  const afterRemove = await api(`/api/gallery/${LIVE}`)
+  check(
+    'the owner CAN take it down, and it leaves the gallery',
+    removed.status === 200 && !(afterRemove.body.items as Array<{ id: string }>).some((i) => i.id === target),
+  )
+
+  // The bug this route was added for: the result screen's toggle could turn OFF
+  // but had no way back ON, so flipping it back changed the UI and nothing else.
+  const putBack = await fetch(`${BASE}/api/gallery/image/${target}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deviceId: dev2 }),
+  })
+  const afterRestore = await api(`/api/gallery/${LIVE}`)
+  check(
+    'and CAN put it back (PUT is the inverse of DELETE)',
+    putBack.status === 200 && (afterRestore.body.items as Array<{ id: string }>).some((i) => i.id === target),
+    `status=${putBack.status}`,
+  )
+  const notMineRestore = await fetch(`${BASE}/api/gallery/image/${target}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deviceId: randomUUID() }),
+  })
+  check('another device cannot put it back either', notMineRestore.status === 404)
+
+  // A teacher-hidden picture: the student may still take it down (a harmless
+  // no-op that keeps their switch working) but must NOT be able to un-hide it.
+  await api(`/api/teacher/images/${target}`, {
+    method: 'PATCH', body: JSON.stringify({ isHidden: true }),
+  })
+  const hiddenList = await mine(dev2)
+  check(
+    'a hidden picture disappears from the student list, with no explanation',
+    !(hiddenList.body.items as Array<{ id: string }>).some((i) => i.id === target),
+  )
+  const takeDownHidden = await fetch(`${BASE}/api/gallery/image/${target}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deviceId: dev2 }),
+  })
+  check('the owner can still take down a hidden picture', takeDownHidden.status === 200)
+  const unhideAttempt = await fetch(`${BASE}/api/gallery/image/${target}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deviceId: dev2 }),
+  })
+  const afterUnhide = await api(`/api/gallery/${LIVE}`)
+  check(
+    'but CANNOT undo a teacher hide with 다시 올리기',
+    unhideAttempt.status === 404 &&
+      !(afterUnhide.body.items as Array<{ id: string }>).some((i) => i.id === target),
+    `status=${unhideAttempt.status}`,
+  )
+  await api(`/api/teacher/images/${target}`, {
+    method: 'PATCH', body: JSON.stringify({ isHidden: false }),
+  })
+
+  // The ETag must notice a swap that leaves the count unchanged — one student
+  // restoring while another removes, inside the same 5-second poll window.
+  const before = await api(`/api/gallery/${LIVE}`)
+  const beforeTag = before.headers.get('etag')!
+  const others = (before.body.items as Array<{ id: string }>).filter((i) => i.id !== target)
+  await fetch(`${BASE}/api/gallery/image/${target}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deviceId: dev2 }),
+  })
+  await api(`/api/teacher/images/${others[0].id}`, {
+    method: 'PATCH', body: JSON.stringify({ isHidden: true }),
+  })
+  const swapped = await fetch(`${BASE}/api/gallery/${LIVE}`, { headers: { 'if-none-match': beforeTag } })
+  check(
+    'a count-preserving gallery swap still busts the shared ETag',
+    swapped.status === 200,
+    `status=${swapped.status}`,
+  )
+  await api(`/api/teacher/images/${others[0].id}`, {
+    method: 'PATCH', body: JSON.stringify({ isHidden: false }),
+  })
+
+  // ── teacher device reset ───────────────────────────────────────────────
+  console.log('\n10. per-device quota panel (PRD §F3)')
+  const listed = await api(`/api/teacher/session-images?code=${LIVE}`)
+  const devices = listed.body.devices as Array<{
+    id: string
+    label: string
+    count: number
+    used: number
+    resetAt: string | null
+  }>
+  const dev3Row = devices.find((d) => d.id === dev3)
+  check('the teacher list carries a quota-derived `used` per device', dev3Row?.used === 2, `used=${dev3Row?.used}`)
+  check('  and an anonymous label, never the UUID', !!dev3Row?.label && dev3Row.label !== dev3, dev3Row?.label)
+
+  const reset = await api(`/api/teacher/devices/${dev3}/reset`, {
+    method: 'POST',
+    body: JSON.stringify({ sessionCode: LIVE }),
+  })
+  const afterReset = await api(`/api/teacher/session-images?code=${LIVE}`)
+  const dev3After = (afterReset.body.devices as typeof devices).find((d) => d.id === dev3)
+  check('reset returns the attempts', reset.body.ok === true && dev3After?.used === 0, `used=${dev3After?.used}`)
+  // The distinction the panel exists to show: a reset moves `used`, never the
+  // picture count, so the two numbers must disagree here.
+  check('  but leaves the pictures alone', (dev3After?.count ?? 0) === (dev3Row?.count ?? -1))
+  check('  and records when it happened', !!dev3After?.resetAt)
+
+  const canDrawAgain = await submit(LIVE, dev3, '숲에서 사진을 찍고 있어요', randomUUID())
+  check('  the student really can draw again', canDrawAgain.body.ok === true, String(canDrawAgain.body.reason ?? ''))
+
+  // ── preflight ──────────────────────────────────────────────────────────
+  console.log('\n11. 수업 전 점검 (the shape PreflightPanel renders)')
+  const pre = await api('/api/health/preflight')
+  const pchecks = pre.body.checks as Array<{ name: string; ok: boolean; detail: string }>
+  check('preflight returns five checks', Array.isArray(pchecks) && pchecks.length === 5, `${pchecks?.length}`)
+  check(
+    '  each has name/ok/detail',
+    pchecks.every((c) => typeof c.name === 'string' && typeof c.ok === 'boolean' && typeof c.detail === 'string'),
+  )
+  const expectations = pre.body.expectations as { fortyImagesMinutes: number; note: string }
+  check(
+    '  and the 40-image estimate the lesson plan is built on',
+    typeof expectations?.fortyImagesMinutes === 'number' && expectations.fortyImagesMinutes > 0,
+    `${expectations?.fortyImagesMinutes}분`,
+  )
+  const pcfg = pre.body.config as Record<string, unknown>
+  check(
+    '  plus the config strip fields',
+    ['imageModel', 'quality', 'imagesPerMinute', 'spacingMs', 'maxInFlight', 'queueOrder'].every((k) => k in pcfg),
+  )
+  const preNoAuth = await fetch(`${BASE}/api/health/preflight`)
+  check('  preflight is behind the teacher password', preNoAuth.status === 401)
+
+  // ── style samples ──────────────────────────────────────────────────────
+  console.log('\n12. style samples (PRD §F4)')
+  const samplesNoAuth = await fetch(`${BASE}/api/teacher/style-samples`)
+  check('style samples are behind the teacher password', samplesNoAuth.status === 401)
+  const samples = await api('/api/teacher/style-samples')
+  check('the panel can read the pinned samples', Array.isArray(samples.body.samples))
+
+  // ── queue labels ───────────────────────────────────────────────────────
+  console.log('\n13. queue screen')
+  const queueAll = await api('/api/teacher/queue')
+  const queueJobs = queueAll.body.jobs as Array<{ deviceLabel: string; action_en: string | null }>
+  check(
+    'the 대기열 screen names the device even without a ?code=',
+    queueJobs.length > 0 && queueJobs.every((j) => j.deviceLabel !== '알 수 없음'),
+    queueJobs[0]?.deviceLabel,
+  )
+  check(
+    '  and shows the English clause, never the Korean sentence',
+    !JSON.stringify(queueJobs).includes('노래해요'),
+  )
+
   // ── session cap ────────────────────────────────────────────────────────
-  console.log('\n10. session cap')
+  console.log('\n14. session cap')
   await api(`/api/teacher/sessions/${LIVE}`, {
     method: 'PATCH', body: JSON.stringify({ totalLimit: 1 }),
   })
@@ -220,12 +407,12 @@ async function main() {
   )
 
   // ── worker auth ────────────────────────────────────────────────────────
-  console.log('\n11. worker endpoint is not open')
+  console.log('\n15. worker endpoint is not open')
   const noSecret = await fetch(`${BASE}/api/worker/tick`, { method: 'POST' })
   check('worker tick requires the shared secret', noSecret.status === 401)
 
   // ── cleanup ────────────────────────────────────────────────────────────
-  console.log('\n12. cleanup')
+  console.log('\n16. cleanup')
   for (const c of [CODE, LIVE]) {
     const del = await api(`/api/teacher/sessions/${c}`, {
       method: 'DELETE', body: JSON.stringify({ confirm: c }),
