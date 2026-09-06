@@ -58,11 +58,19 @@ export async function generateImage(
   }
 }
 
-/** Rough cost estimate for the teacher console. ~$30 / 1M image output tokens. */
-export function estimateCostUsd(images: number, quality: string): number {
-  const perImage = quality === 'high' ? 0.165 : quality === 'low' ? 0.005 : 0.045
-  return Math.round(images * perImage * 100) / 100
-}
+/**
+ * Re-exported from lib/pricing.ts, which is NOT server-only: the teacher's 화질
+ * buttons have to print the same per-image price that 예상 비용 is computed
+ * from, and a client component cannot import this file.
+ *
+ * `medium` used to be $0.045 here against $0.041 in the PRD. See lib/pricing.ts
+ * for which one OpenAI's price list agrees with.
+ *
+ * KNOWN IMPRECISION: the console costs every finished picture at the session's
+ * CURRENT quality, so changing quality mid-lesson re-prices pictures that were
+ * already drawn. Making it exact means recording the quality on each job row.
+ */
+export { estimateCostUsd } from '@/lib/pricing'
 
 /**
  * Deterministic stand-in used only when MOCK_OPENAI=1.
