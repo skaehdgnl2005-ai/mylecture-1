@@ -124,17 +124,34 @@ export function TeacherConsole() {
   const newSession = () =>
     call(() => fetch('/api/teacher/sessions', { method: 'POST' }), 'new')
 
-  const closeSession = () =>
-    active &&
+  // 'draining', never straight to 'closed'.
+  //
+  // The worker's tick() returns immediately when no session is open or draining,
+  // so closing outright abandons every picture still in the queue — and at
+  // 5 images a minute there are almost always several, because the teacher
+  // closes the lesson while the last students are still waiting. Draining stops
+  // NEW submissions (POST /api/jobs requires 'open') and lets the queue finish;
+  // the worker flips it to 'closed' when nothing is left.
+  const closeSession = () => {
+    if (!active) return
+    const pending = (stats?.queued ?? 0) + (stats?.running ?? 0)
+    if (
+      pending > 0 &&
+      !confirm(
+        `아직 그리는 중인 그림이 ${pending}장 있어요.\n수업을 닫으면 새 그림은 못 그리지만, 이 ${pending}장은 끝까지 그려요. 닫을까요?`,
+      )
+    )
+      return
     call(
       () =>
         fetch(`/api/teacher/sessions/${active.code}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ status: 'closed' }),
+          body: JSON.stringify({ status: 'draining' }),
         }),
       'close',
     )
+  }
 
   const patch = (body: Record<string, unknown>) =>
     active &&
@@ -295,12 +312,20 @@ export function TeacherConsole() {
                 </a>
                 <button
                   onClick={closeSession}
-                  disabled={busy === 'close'}
-                  className="rounded-xl border-2 border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-700"
+                  disabled={busy === 'close' || active.status === 'draining'}
+                  className="rounded-xl border-2 border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-700 disabled:opacity-50"
                 >
                   수업 닫기
                 </button>
               </div>
+
+              {active.status === 'draining' && (
+                <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-900">
+                  수업을 닫았어요. 새 그림은 받지 않고, 남은{' '}
+                  {(stats?.queued ?? 0) + (stats?.running ?? 0)}장을 마저 그리는 중이에요. 다 그리면 저절로
+                  끝나요.
+                </div>
+              )}
             </div>
           </section>
 

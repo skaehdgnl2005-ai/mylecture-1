@@ -4,6 +4,7 @@ import { db, logEvent } from '@/lib/db'
 import { requireTeacher } from '@/lib/auth'
 import { env } from '@/lib/env'
 import { deleteImages } from '@/lib/storage'
+import { kickWorker } from '@/lib/pump'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,9 +57,35 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ code: string 
   if (error) return NextResponse.json({ ok: false, message: error.message }, { status: 500 })
   await logEvent('session_updated', { sessionCode: code, detail: patch })
 
+  // 수업 닫기 asks for 'draining' so pictures already queued still get drawn.
+  // When there is nothing left to draw — the usual case, the teacher closes
+  // after the last picture lands — draining would be a state nobody ever leaves
+  // in front of the teacher, so finish the job here.
+  let session = data
+  if (p.status === 'draining') {
+    const { count: pending } = await db()
+      .from('jobs')
+      .select('id', { count: 'exact', head: true })
+      .eq('session_code', code)
+      .in('status', ['queued', 'running'])
+
+    if (!pending) {
+      const { data: closed } = await db()
+        .from('sessions')
+        .update({ status: 'closed', closed_at: new Date().toISOString() })
+        .eq('code', code)
+        .eq('status', 'draining')
+        .select()
+        .single()
+      if (closed) session = closed
+    } else {
+      kickWorker()
+    }
+  }
+
   return NextResponse.json({
     ok: true,
-    session: data,
+    session,
     clampedIpm: p.perMinuteLimit !== undefined && p.perMinuteLimit > env().OPENAI_IPM,
   })
 }

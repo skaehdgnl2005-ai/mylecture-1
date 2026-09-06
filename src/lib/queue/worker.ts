@@ -215,6 +215,36 @@ export async function tick(now = Date.now()): Promise<TickSummary> {
   }
 
   await Promise.allSettled([...inFlight])
+
+  // A draining session is one the teacher has closed: no new submissions are
+  // accepted (POST /api/jobs requires status 'open'), but the pictures already
+  // waiting still get drawn. Once none are left it becomes 'closed' for real.
+  //
+  // This lives here rather than on the teacher's screen because it must happen
+  // whether or not that laptop is still open — the last student's picture is
+  // usually still in flight when the teacher shuts the lid.
+  //
+  // The status is re-read rather than taken from `session`: a tick that began
+  // while the lesson was still open is usually the very tick that drains the
+  // last picture, and the teacher pressed 수업 닫기 somewhere in the middle of it.
+  const current = (await loadSession(session.code)) ?? session
+  if (current.status === 'draining') {
+    const { count: left } = await db()
+      .from('jobs')
+      .select('id', { count: 'exact', head: true })
+      .eq('session_code', session.code)
+      .in('status', ['queued', 'running'])
+
+    if (!left) {
+      await db()
+        .from('sessions')
+        .update({ status: 'closed', closed_at: new Date().toISOString() })
+        .eq('code', session.code)
+        .eq('status', 'draining')
+      await logEvent('session_drained', { sessionCode: session.code })
+    }
+  }
+
   summary.ms = Date.now() - started
   return summary
 }

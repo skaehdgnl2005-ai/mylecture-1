@@ -28,7 +28,10 @@ export async function POST(req: Request) {
       { status: 404 },
     )
   }
-  if (session.status === 'closed') {
+  // 'draining' means the teacher has closed the lesson and the queue is
+  // finishing. New submissions are refused (POST /api/jobs requires 'open'), so
+  // say it here rather than letting a student fill in five steps first.
+  if (session.status === 'closed' || session.status === 'draining') {
     return NextResponse.json(
       { ok: false, message: '오늘 수업은 끝났어요. 갤러리는 계속 볼 수 있어요.', closed: true },
       { status: 200 },
