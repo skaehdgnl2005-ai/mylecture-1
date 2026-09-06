@@ -115,6 +115,7 @@ pnpm db:push
 | `pnpm loadtest --code XXXX --n 20` | 20건 동시 투입 후 속도 게이트 검증 |
 | `pnpm tsx scripts/smoke.ts` | API 레벨 종단 점검 (전부 PASS 여야 함) |
 | `pnpm tsx scripts/verify-gate.ts` | 페이서·할당량 불변식을 Postgres에 직접 검증 |
+| `pnpm tsx scripts/age-drift-grid.ts` | 연령 드리프트 확인용 24장 그리드 (`--go` 없이는 안 그림, 약 $0.12) |
 
 ---
 
