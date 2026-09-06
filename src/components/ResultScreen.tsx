@@ -15,24 +15,36 @@ import { PrimaryButton, SecondaryButton } from './ui'
  *    handler burns. So the blob is prefetched when this screen mounts.
  *  - share() rejects with AbortError when the user dismisses the sheet. That is
  *    a cancellation, not a failure, and must not show an error.
+ *
+ * Three states, not two. A single ready flag cannot tell "still fetching" from
+ * "the fetch failed", and those need opposite answers. While fetching, the
+ * button must be closed: a tap has no File yet, so it skips the share sheet for
+ * the anchor — which on an iPhone means Files instead of Photos, the exact
+ * failure the RUNBOOK's 공유 시트 먼저 order exists to prevent. Once the fetch
+ * has failed the button must be open, because no File is coming and the anchor
+ * is a perfectly good answer.
  */
 function useShareableFile(imageId: string | null) {
   const fileRef = useRef<File | null>(null)
-  const [ready, setReady] = useState(false)
+  const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
 
   useEffect(() => {
     if (!imageId) return
     let cancelled = false
+    fileRef.current = null
+    setState('loading')
     ;(async () => {
       try {
         const res = await fetch(`/api/images/${imageId}/file`)
-        if (!res.ok) return
+        if (!res.ok) throw new Error(String(res.status))
         const blob = await res.blob()
         if (cancelled) return
         fileRef.current = new File([blob], 'my-future.jpg', { type: 'image/jpeg' })
-        setReady(true)
+        setState('ready')
       } catch {
-        /* fall back to the download anchor */
+        // Fall back to the download anchor — and ENABLE the button to do it.
+        // A miss here used to leave 그림 저장하기 disabled for good.
+        if (!cancelled) setState('failed')
       }
     })()
     return () => {
@@ -40,7 +52,9 @@ function useShareableFile(imageId: string | null) {
     }
   }, [imageId])
 
-  return { fileRef, ready }
+  // Only `settled` is returned: whether a File actually exists is fileRef's
+  // job, and save() already has to check it at tap time anyway.
+  return { fileRef, settled: state !== 'loading' }
 }
 
 export function ResultScreen({
@@ -67,7 +81,7 @@ export function ResultScreen({
   onRedraw: () => void
   onOpenGallery: () => void
 }) {
-  const { fileRef, ready } = useShareableFile(imageId)
+  const { fileRef, settled } = useShareableFile(imageId)
   const [hint, setHint] = useState<string | null>(null)
 
   const save = async () => {
@@ -144,7 +158,16 @@ export function ResultScreen({
       </div>
 
       <div className="pb-safe space-y-2.5 px-4 pt-3">
-        <PrimaryButton onClick={save} disabled={!ready && !imageId}>
+        {/* Fixed height, so the line appearing and going does not move the
+            button out from under a thumb already on its way to it. Outside the
+            button on purpose: inside, it would change the accessible name. */}
+        <p className="h-4 text-center text-[13px] text-gray-400" aria-live="polite">
+          {settled ? '' : '그림을 준비하고 있어요…'}
+        </p>
+        {/* `!settled`, not `!ready`: see useShareableFile. This read
+            `!ready && !imageId` — and imageId is a required prop, so it was
+            always false and the button was never actually disabled. */}
+        <PrimaryButton onClick={save} disabled={!settled}>
           그림 저장하기
         </PrimaryButton>
         {remaining > 0 ? (
