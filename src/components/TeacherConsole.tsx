@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import Image from 'next/image'
 import { clsx } from 'clsx'
+import { PreflightPanel } from './PreflightPanel'
+import { DevicePanel, type TeacherDevice } from './DevicePanel'
+import { StyleSamplePanel } from './StyleSamplePanel'
 
 interface Session {
   code: string
@@ -32,6 +35,8 @@ interface ImageRow {
   url: string
   tags: string[]
   is_hidden: boolean
+  /** false when the STUDENT took it down. 다시 보이기 cannot undo that. */
+  in_gallery: boolean
   device_id: string
   deviceLabel?: string
 }
@@ -57,6 +62,7 @@ export function TeacherConsole() {
   const [active, setActive] = useState<Session | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [images, setImages] = useState<ImageRow[]>([])
+  const [devices, setDevices] = useState<TeacherDevice[]>([])
   const [qr, setQr] = useState<string | null>(null)
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
@@ -77,15 +83,25 @@ export function TeacherConsole() {
         fetch(`/api/teacher/session-images?code=${d.active.code}`, { cache: 'no-store' }),
         fetch(`/api/teacher/qr?code=${d.active.code}`, { cache: 'no-store' }),
       ])
-      if (imgRes.ok) setImages((await imgRes.json()).images ?? [])
+      if (imgRes.ok) {
+        const d = await imgRes.json()
+        setImages(d.images ?? [])
+        setDevices(d.devices ?? [])
+      }
       if (qrRes.ok) setQr(await qrRes.text())
     } else {
       setImages([])
+      setDevices([])
       setQr(null)
     }
   }, [])
 
-  // The dashboard poll doubles as a tertiary worker pump.
+  // 4-second dashboard refresh.
+  //
+  // This poll does NOT wake the worker. kickWorker() is called from POST
+  // /api/jobs, GET /api/jobs/[id] and the 대기열 screen's '지금 그리기' button —
+  // and nowhere else. The comment here used to claim otherwise; the code was
+  // right and the comment was wrong.
   useEffect(() => {
     load()
     const t = setInterval(load, 4000)
@@ -143,6 +159,33 @@ export function TeacherConsole() {
       img.id,
     )
 
+  // ── 기기 횟수 초기화 (PRD §F3) ──────────────────────────────────────────────
+  // A lighter confirm than deleteSession's two-step. This hands a student extra
+  // image budget — a cost decision, and one the session total cap still bounds —
+  // but it destroys nothing, so one question is the right amount of friction.
+  // Typing the code is reserved for the irreversible action.
+  const resetDevice = (d: TeacherDevice) => {
+    if (!active) return
+    const again = d.resetAt ? '이미 한 번 초기화한 기기예요.\n' : ''
+    // Promise the number the SERVER will actually honour: the session total cap
+    // is checked before the per-device quota, so it can be the smaller of the two.
+    const grant = Math.max(0, Math.min(active.per_device_limit, sessionRemaining))
+    const body =
+      grant === 0
+        ? '수업 전체 상한에 도달해서, 지금은 되돌려도 더 그릴 수 없어요. 그래도 되돌릴까요?'
+        : `이 기기가 그림을 ${grant}번 더 그릴 수 있어요.`
+    if (!confirm(`${again}'${d.label}'의 횟수를 되돌릴까요?\n${body}`)) return
+    call(
+      () =>
+        fetch(`/api/teacher/devices/${d.id}/reset`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionCode: active.code }),
+        }),
+      `reset:${d.id}`,
+    )
+  }
+
   const deleteSession = async (code: string) => {
     // Two-step confirm (PRD §F4): the second step requires typing the code, so
     // a mis-click cannot delete a class's work.
@@ -161,6 +204,12 @@ export function TeacherConsole() {
   }
 
   const joinUrl = active && origin ? `${origin}/s/${active.code}` : ''
+
+  // The same arithmetic reserve_attempt() does: jobs in queued/running/done count
+  // against total_limit, and that check runs BEFORE the per-device quota.
+  const sessionRemaining = active
+    ? Math.max(0, active.total_limit - ((stats?.queued ?? 0) + (stats?.running ?? 0) + (stats?.done ?? 0)))
+    : 0
 
   return (
     <main className="mx-auto max-w-5xl space-y-6 p-5 pb-20">
@@ -304,6 +353,14 @@ export function TeacherConsole() {
                       <Image src={img.url} alt="" width={512} height={768} quality={75} className="aspect-[2/3] w-full object-cover" />
                     </div>
                     <div className="truncate text-[11px] text-gray-400">{img.deviceLabel}</div>
+                    {/* A student can take their own picture down from the gallery
+                        screen. Without this line the teacher sees a picture that
+                        is not on the wall and no reason why — and pressing
+                        다시 보이기 would not put it back, because that button only
+                        clears is_hidden. */}
+                    {!img.is_hidden && !img.in_gallery && (
+                      <div className="text-[11px] text-amber-700">학생이 내렸어요</div>
+                    )}
                     <button
                       onClick={() => toggleHide(img)}
                       disabled={busy === img.id}
@@ -319,8 +376,32 @@ export function TeacherConsole() {
               </div>
             )}
           </section>
+
+          {/* ── 기기 횟수 초기화 (PRD §F3) — under the picture grid because the
+              teacher identifies a phone by matching its picture above. ── */}
+          <DevicePanel
+            devices={devices}
+            perDeviceLimit={active.per_device_limit}
+            sessionRemaining={sessionRemaining}
+            busy={busy}
+            onReset={resetDevice}
+          />
         </>
       )}
+
+      {/* Both panels sit OUTSIDE the active/inactive branch on purpose.
+          The pre-class check and the style samples are day-before work, done when
+          no session exists — and a stable position in the children array means a
+          session opening or closing mid-run cannot remount them. */}
+      <PreflightPanel hasActiveSession={!!active} />
+
+      {/* `!!active`, not a status check: GET /api/teacher/sessions picks `active`
+          as the first row whose status is 'open' or 'draining', so re-testing the
+          status here would be a branch that can never be false. */}
+      <StyleSamplePanel
+        sessionOpen={!!active}
+        pendingJobs={(stats?.queued ?? 0) + (stats?.running ?? 0)}
+      />
 
       <section className="space-y-3 rounded-3xl bg-white p-6">
         <h2 className="font-semibold text-gray-900">지난 수업</h2>

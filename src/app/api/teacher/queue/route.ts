@@ -29,8 +29,14 @@ export async function GET(req: Request) {
 
   const { data: jobs } = await q
 
-  const { data: devices } = code
-    ? await db().from('devices').select('id, label, reset_at').eq('session_code', code)
+  // Labels are looked up for whatever sessions the returned jobs actually belong
+  // to, not just for an explicit ?code=. QueuePanel deliberately shows every
+  // session's jobs (leftovers from a previous lesson are the whole point of the
+  // screen), and asking for one code left every row reading '알 수 없음' — which
+  // is exactly the column a teacher opens this panel to read.
+  const codes = [...new Set((jobs ?? []).map((j) => j.session_code))]
+  const { data: devices } = codes.length
+    ? await db().from('devices').select('id, label, reset_at').in('session_code', codes)
     : { data: [] }
 
   const labels = Object.fromEntries((devices ?? []).map((d) => [d.id, d.label]))
