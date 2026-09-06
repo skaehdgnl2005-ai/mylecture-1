@@ -406,13 +406,69 @@ async function main() {
     `${capped.body.reason}: ${capped.body.message}`,
   )
 
+  // ── draining ───────────────────────────────────────────────────────────
+  console.log('\n15. 수업 닫기 drains instead of discarding')
+  // Section 14 pinned the session cap at 1 to prove the refusal. Lift it again,
+  // or this section measures that instead of what it means to.
+  await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ totalLimit: 50 }),
+  })
+  const drainDevice = randomUUID()
+  const inFlight = await submit(LIVE, drainDevice, '공방에서 의자를 만들고 있어요', randomUUID())
+  check('a picture is waiting when the teacher closes', inFlight.body.ok === true)
+
+  await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'draining' }),
+  })
+  const joinWhileDraining = await api('/api/session/join', {
+    method: 'POST', body: JSON.stringify({ code: LIVE, deviceId: randomUUID() }),
+  })
+  check(
+    'a draining session takes no new students',
+    joinWhileDraining.body.ok === false && joinWhileDraining.body.closed === true,
+  )
+  const submitWhileDraining = await submit(LIVE, randomUUID(), '바다에서 헤엄쳐요', randomUUID())
+  check('and no new submissions', submitWhileDraining.body.ok === false)
+
+  // The picture already in the queue must still be drawn, and the session must
+  // close itself once it is. Closing straight to 'closed' would strand it: the
+  // worker's tick() returns immediately with no open or draining session.
+  const drainDeadline = Date.now() + 120_000
+  let drained = false
+  while (Date.now() < drainDeadline && !drained) {
+    await new Promise((r) => setTimeout(r, 2000))
+    const st = await api(`/api/jobs/${inFlight.body.jobId}`)
+    if (st.body.status === 'done' || st.body.status === 'failed') drained = true
+  }
+  const finalJob = await api(`/api/jobs/${inFlight.body.jobId}`)
+  check(
+    'the picture already in the queue is still drawn',
+    finalJob.body.status === 'done',
+    String(finalJob.body.status),
+  )
+  let drainedRow: { code: string; status: string } | undefined
+  const closeDeadline = Date.now() + 30_000
+  while (Date.now() < closeDeadline) {
+    const listNow = await api('/api/teacher/sessions')
+    drainedRow = (listNow.body.sessions as Array<{ code: string; status: string }>).find(
+      (s) => s.code === LIVE,
+    )
+    if (drainedRow?.status === 'closed') break
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+  check(
+    'and the session closes itself when the queue is empty',
+    drainedRow?.status === 'closed',
+    String(drainedRow?.status),
+  )
+
   // ── worker auth ────────────────────────────────────────────────────────
-  console.log('\n15. worker endpoint is not open')
+  console.log('\n16. worker endpoint is not open')
   const noSecret = await fetch(`${BASE}/api/worker/tick`, { method: 'POST' })
   check('worker tick requires the shared secret', noSecret.status === 401)
 
   // ── cleanup ────────────────────────────────────────────────────────────
-  console.log('\n16. cleanup')
+  console.log('\n17. cleanup')
   for (const c of [CODE, LIVE]) {
     const del = await api(`/api/teacher/sessions/${c}`, {
       method: 'DELETE', body: JSON.stringify({ confirm: c }),
