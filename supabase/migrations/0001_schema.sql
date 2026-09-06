@@ -134,6 +134,18 @@ alter table jobs       enable row level security;
 alter table images     enable row level security;
 alter table pacer      enable row level security;
 alter table job_events enable row level security;
-revoke all on all tables in schema public from anon, authenticated;
-revoke all on all sequences in schema public from anon, authenticated;
-revoke all on all functions in schema public from anon, authenticated;
+-- Guarded so the file also applies to a plain Postgres (CI / local docker),
+-- where Supabase's anon/authenticated roles do not exist.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on all tables    in schema public from anon;
+    revoke all on all sequences in schema public from anon;
+    revoke all on all functions in schema public from anon;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    revoke all on all tables    in schema public from authenticated;
+    revoke all on all sequences in schema public from authenticated;
+    revoke all on all functions in schema public from authenticated;
+  end if;
+end $$;

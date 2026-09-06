@@ -165,3 +165,49 @@ begin
   return v_count;
 end;
 $$;
+
+-- ─────────────────────────────────────────────────────────── tick lease ─────
+-- Stops several pumps (pg_cron + 20 student polls + the teacher dashboard) from
+-- each opening their own 300-second draining loop.
+--
+-- This is an OPTIMISATION, not a correctness mechanism: claim_job() already
+-- guarantees the rate and concurrency bounds no matter how many ticks run. It
+-- exists so we do not burn Vercel invocations and Provisioned Memory on ticks
+-- that would all be waiting on the same pacer.
+--
+-- A session-level pg_advisory_lock cannot be used here: supabase-js speaks
+-- PostgREST over HTTP, so consecutive calls may land on different pooled
+-- connections and the lock would be released the moment the first call returns.
+-- A row with a TTL is connection-independent and self-healing if a worker dies.
+create table if not exists worker_lock (
+  id           boolean primary key default true check (id),
+  locked_until timestamptz not null default '-infinity',
+  holder       text
+);
+insert into worker_lock (id) values (true) on conflict (id) do nothing;
+alter table worker_lock enable row level security;
+
+create or replace function try_acquire_tick(p_holder text, p_ttl_seconds int)
+returns boolean
+language plpgsql
+as $$
+declare
+  v_rows int;
+begin
+  update worker_lock
+     set locked_until = now() + make_interval(secs => p_ttl_seconds),
+         holder = p_holder
+   where id and locked_until < now();
+  get diagnostics v_rows = row_count;
+  return v_rows > 0;
+end;
+$$;
+
+create or replace function release_tick(p_holder text)
+returns void
+language sql
+as $$
+  update worker_lock
+     set locked_until = '-infinity'
+   where id and holder = p_holder;
+$$;
