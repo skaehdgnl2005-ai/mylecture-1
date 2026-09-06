@@ -5,8 +5,29 @@ Applied in filename order by `pnpm db:push` (see `scripts/migrate.ts`).
 | File | What |
 |---|---|
 | `0001_schema.sql` | Tables, indexes, constraints, `jobs_public` view, RLS lockdown |
-| `0002_claim_job.sql` | `claim_job()` global rate gate, `used_quota()`, `queue_position()`, `reap_expired_leases()` |
-| `0003_cron.sql` | pg_cron heartbeat that pokes the Vercel worker over pg_net |
+| `0002_claim_job.sql` | `claim_job()` global rate gate, `used_quota()`, `queue_position()`, `ms_until_slot()`, `reap_expired_leases()` |
+| `0003_cron.sql` | `pump_worker()` + the pg_cron heartbeat that pokes the Vercel worker over pg_net |
+| `0004_reserve_attempt.sql` | `reserve_attempt()` — the cap check and the job insert in ONE transaction |
+| `0005_cron_health.sql` | `cron_health()`, so the teacher console can tell a scheduled cron from a *working* one |
+| `0006_style_samples.sql` | `style_samples` — the pinned thumbnails on the student's style cards (PRD §F4) |
+| `0007_expire_queued.sql` | Extends `reap_expired_leases()` and `pump_worker()` so a `queued` job cannot sit past its deadline forever |
+
+Later files redefine functions from earlier ones (`0007` rewrites two of `0003`'s
+and `0002`'s). Everything is `create or replace` / `if not exists`, so the whole
+directory is safe to re-run, but only **in order** — applying `0007` to a
+database that never got `0002` fails.
+
+## Where the pieces live
+
+Three invariants are enforced in SQL and nowhere else, because on Vercel many
+lambdas run at once and anything in-process would silently permit *limit ×
+instances*:
+
+- **the rate gate** — `claim_job()` (`0002`), which advances a single pacer row
+- **the quota and the cap** — `reserve_attempt()` (`0004`), lock order
+  `sessions -> devices`, fixed there and taken nowhere else
+- **nothing gets stranded** — `reap_expired_leases()` (`0002`, extended by
+  `0007`), run at the top of every worker tick
 
 ## Before running 0003
 

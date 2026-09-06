@@ -18,7 +18,9 @@ create extension if not exists pg_net;
 
 -- Secrets go in Vault, never inline: cron.job is readable by anyone with DB
 -- access and ends up in migrations, dashboards and screenshots.
--- Run these ONCE by hand (or via scripts/setup-cron.ts) with real values:
+-- Run these ONCE by hand in the Supabase SQL editor, with real values. (There
+-- is no script for it: it is a two-line, once-per-project job that needs
+-- credentials the repo must never hold.)
 --
 --   select vault.create_secret('https://your-app.vercel.app', 'app_url');
 --   select vault.create_secret('<WORKER_SECRET>', 'worker_secret');
