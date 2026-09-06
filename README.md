@@ -35,8 +35,11 @@ Postgres가 큐이자 속도 게이트입니다. 학생이 제출하면 `jobs` �
 전부 `claim_job()`을 통과하므로 중복 호출은 낭비일 뿐 절대 위험하지 않습니다.
 
 1. **Supabase pg_cron** 10초마다 (주 경로 — 모든 폰이 꺼져 있어도 동작)
-2. 학생의 상태 폴링
-3. 교사 대시보드 및 "지금 그리기" 버튼
+2. 학생의 상태 폴링 (`POST /api/jobs`, `GET /api/jobs/{id}`)
+3. 대기열 화면의 **"지금 그리기"** 버튼
+
+> 교사 대시보드의 4초 갱신은 워커를 깨우지 **않습니다.** 화면만 새로 그립니다.
+> (예전 문서와 코드 주석이 반대로 적혀 있었습니다.)
 
 왜 이 방식인지, 어떤 대안을 왜 기각했는지는 구현 계획서에 근거와 함께 정리돼 있습니다.
 
@@ -106,11 +109,11 @@ pnpm db:push
 | `pnpm build` / `pnpm start` | 프로덕션 빌드 · 실행 |
 | `pnpm typecheck` | `next typegen && tsc --noEmit` |
 | `pnpm test` | Vitest — 금칙어·프롬프트·오류 분류·백오프·칩 동기화 |
-| `pnpm e2e` | Playwright — PRD §9 수용 기준 6개 |
+| `pnpm e2e` | Playwright — PRD §9 수용 기준 + 교사 패널 · 갤러리 내리기 |
 | `pnpm db:push` | 마이그레이션 적용 |
 | `pnpm check:limits` | **계정의 실제 분당 이미지 한도를 읽음** |
 | `pnpm loadtest --code XXXX --n 20` | 20건 동시 투입 후 속도 게이트 검증 |
-| `pnpm tsx scripts/smoke.ts` | API 레벨 종단 점검 33항목 |
+| `pnpm tsx scripts/smoke.ts` | API 레벨 종단 점검 (전부 PASS 여야 함) |
 | `pnpm tsx scripts/verify-gate.ts` | 페이서·할당량 불변식을 Postgres에 직접 검증 |
 
 ---
@@ -125,6 +128,15 @@ pnpm db:push
 - **갤러리는 폴링합니다.** Supabase Realtime의 `postgres_changes` 는 구독자별로 RLS를 평가하므로
   `public.images` 를 anon 역할에 열고 컬럼 grant를 손으로 관리해야 합니다. 폴링은 서버가
   `id, url, tags` 세 컬럼만 고르므로 익명성이 리뷰 가능한 한 곳에서 강제됩니다.
+- **"내 그림" 확인은 갤러리 목록과 분리돼 있습니다.** `/api/gallery/{코드}` 는 `id, url, tags` 세
+  컬럼만 돌려주고, ETag(개수 + 최신 id)를 교실의 모든 폰이 공유해서 대부분 304로 끝납니다.
+  여기에 소유 표시를 얹으면 응답이 기기마다 달라져 그 304가 통째로 깨집니다. 그래서 소유 확인은
+  `POST /api/gallery/{코드}/mine` 이라는 별도 경로이고, 기기 ID는 URL이 아니라 본문으로 보냅니다
+  (접근 로그에 남지 않게).
+- **기기별 "남은 횟수"는 그림 장수가 아니라 `jobs` 파생 카운트입니다.** 대기 중인 작업도 횟수를
+  차지하고, "횟수 초기화"는 그림 장수를 움직이지 않습니다. 두 숫자를 같은 것으로 합치면
+  초기화 버튼이 아무 일도 안 한 것처럼 보입니다. 규칙은 `src/lib/device-usage.ts` 에 있고
+  `used_quota()` 와 짝지어 테스트로 고정돼 있습니다.
 - **브라우저는 Supabase 키를 전혀 갖지 않습니다.** `NEXT_PUBLIC_SUPABASE_*` 변수를 만들지 마세요.
 - **`moderation: 'auto'` 는 하드코딩입니다.** 설정할 수 있는 것은 언젠가 설정됩니다.
 - **자유 문장(`raw_text_ko`)은 완료 시 NULL로 지웁니다.** 애플리케이션은 `jobs` 대신 `jobs_public`
