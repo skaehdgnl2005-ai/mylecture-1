@@ -8,7 +8,13 @@
  *     lets a session exceed total_limit, under simultaneous submissions,
  *     including double-taps sharing an idempotency key.
  *
- * Run against the docker Postgres:
+ * STOP THE APP SERVER FIRST. This drives claim_job() directly, and a running
+ * worker (plus the pg_cron pump) will claim the seeded jobs out from under it,
+ * which shows up as intermittent failures in sections A and D.
+ *
+ * Run against local Supabase:
+ *   PGURL=postgres://postgres:postgres@127.0.0.1:55322/postgres pnpm tsx scripts/verify-gate.ts
+ * or a plain Postgres:
  *   PGURL=postgres://postgres:test@localhost:55432/mirae pnpm tsx scripts/verify-gate.ts
  */
 import { Client, Pool } from 'pg'
@@ -23,9 +29,13 @@ function check(name: string, ok: boolean, detail = '') {
 }
 
 async function reset(admin: Client, opts: { perDevice?: number; total?: number } = {}) {
-  await admin.query(`delete from job_events; delete from images; delete from jobs;
-                     delete from devices; delete from sessions;
-                     update pacer set next_slot_at = now();`)
+  // Every statement carries a WHERE clause on purpose: Supabase enables the
+  // pg-safeupdate extension, which rejects a bare UPDATE or DELETE outright. The
+  // script must run against the real thing, not only against a plain Postgres.
+  await admin.query(`delete from job_events where true; delete from images where true;
+                     delete from jobs where true; delete from devices where true;
+                     delete from sessions where true;
+                     update pacer set next_slot_at = now() where id;`)
   await admin.query(
     `insert into sessions (code, per_device_limit, total_limit, per_minute_limit)
      values ('TEST', $1, $2, 5)`,
@@ -210,11 +220,27 @@ async function testFailureDoesNotCharge() {
   check('student may submit again after a failure', retry.rows[0].ok === true)
 
   // A crashed worker: status stays 'running' but the lease expires.
+  //
+  // The point of this check is that correctness does NOT depend on the reaper:
+  // used_quota() ignores an expired lease the instant it expires. Against a live
+  // Supabase the reap-leases cron may requeue the row first, which is also a
+  // correct outcome (the attempt is alive and will be retried) — so read the row
+  // and assert whichever invariant actually applies.
   await admin.query(
     `update jobs set status='running', lease_expires_at = now() - interval '1 minute'
       where idempotency_key='b'`)
-  used = (await admin.query(`select used_quota('TEST',$1) as n`, [device])).rows[0].n
-  check('an expired lease stops counting without any reaper run', used === 1, `used=${used}`)
+  const after = await admin.query(
+    `select status, used_quota('TEST',$1) as n from jobs where idempotency_key='b'`, [device])
+  used = after.rows[0].n
+  if (after.rows[0].status === 'running') {
+    check('an expired lease stops counting without any reaper run', used === 1, `used=${used}`)
+  } else {
+    check(
+      "the reaper requeued the dead job, so the attempt is still the student's",
+      after.rows[0].status === 'queued' && used === 2,
+      `status=${after.rows[0].status} used=${used}`,
+    )
+  }
 
   await admin.end()
 }
@@ -238,8 +264,8 @@ async function testOrdering() {
 
   const fifo = await pool.query(`select * from claim_job(0, 10, 'fifo')`)
   check('fifo takes the oldest job', fifo.rows[0].idempotency_key === 'e1', fifo.rows[0].idempotency_key)
-  await admin.query(`update jobs set status='queued', lease_expires_at=null`)
-  await admin.query(`update pacer set next_slot_at = now()`)
+  await admin.query(`update jobs set status='queued', lease_expires_at=null where true`)
+  await admin.query(`update pacer set next_slot_at = now() where id`)
 
   await admin.query(`update jobs set status='done' where idempotency_key='e1'`)
   const ap = await pool.query(`select * from claim_job(0, 10, 'attempt_priority')`)
