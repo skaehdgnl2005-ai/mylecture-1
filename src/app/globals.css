@@ -1,26 +1,91 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Tailwind v4 is CSS-first: there is no tailwind.config.js, and `darkMode:
+   'class'` no longer exists. Projector mode is a data attribute rather than
+   prefers-color-scheme, because the classroom laptop will be in light mode. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+@theme {
+  /* One accent ramp plus neutrals (PRD §7: 포인트 색 1개 + 중립 회색). */
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dbe6ff;
+  --color-brand-200: #bed2ff;
+  --color-brand-300: #91b4ff;
+  --color-brand-400: #5d8bff;
+  --color-brand-500: #3763f4;
+  --color-brand-600: #2447d8;
+  --color-brand-700: #1e39ae;
+  --color-brand-800: #1e3389;
+  --color-brand-900: #1e2f6b;
+
+  --font-sans: var(--font-pretendard), system-ui, -apple-system, 'Segoe UI',
+    'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+
+  --radius-card: 1rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@layer base {
+  /* Tailwind v4 defaults every border colour to currentColor, so a bare
+     `border` inherits the text colour until a base default is set. */
+  *,
+  ::after,
+  ::before {
+    border-color: var(--color-gray-200);
+  }
 
-@media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    color-scheme: light;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+    font-family: var(--font-sans);
+  }
+
+  /* Anything under 16px triggers focus-zoom on iOS. Note that 16px inside a
+     transform: scale(0.9) wrapper computes to 14.4px and still zooms, so no
+     scaled wrappers around inputs. */
+  input,
+  textarea,
+  select,
+  button {
+    font-size: 16px;
+    font-family: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer utilities {
+  /* 100dvh, not 100vh: vh does not account for the mobile browser chrome. */
+  .h-screen-safe {
+    height: 100dvh;
+  }
+
+  /* env(safe-area-inset-*) only evaluates non-zero when the viewport export
+     sets viewportFit: 'cover'. Without it this silently becomes 1rem. */
+  .pb-safe {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  .pt-safe {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
