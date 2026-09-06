@@ -49,9 +49,24 @@ export async function GET(req: Request, ctx: { params: Promise<{ code: string }>
   const items = data ?? []
 
   // Cheap change-detection so a room full of phones polling every 5s mostly
-  // gets 304s. The count plus the newest id changes on every insert, hide and
-  // un-hide, which is exactly when the grid needs to repaint.
-  const etag = `W/"${items.length}-${items[0]?.id ?? 'empty'}"`
+  // gets 304s.
+  //
+  // Count plus newest id is NOT enough on its own: two different sets of the
+  // same size with the same newest member collide. That used to be unreachable
+  // (the count only ever fell without a teacher un-hiding), but students can now
+  // put their own picture back from the gallery screen, so one student removing
+  // while another restores inside the same 5-second window is an ordinary
+  // classroom event — and it would have served a stale grid to every phone.
+  // The id digest closes that hole. It is one pass over at most 500 short
+  // strings, and it stays IDENTICAL for every viewer, which is the property that
+  // makes the 304s worth having.
+  let digest = 0x811c9dc5
+  for (const item of items) {
+    for (let i = 0; i < item.id.length; i++) {
+      digest = ((digest ^ item.id.charCodeAt(i)) * 0x01000193) >>> 0
+    }
+  }
+  const etag = `W/"${items.length}-${items[0]?.id ?? 'empty'}-${digest.toString(36)}"`
   if (req.headers.get('if-none-match') === etag) {
     return new NextResponse(null, { status: 304, headers: { ETag: etag } })
   }

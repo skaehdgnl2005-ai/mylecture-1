@@ -50,6 +50,8 @@ export function ResultScreen({
   remaining,
   inGallery,
   onToggleGallery,
+  galleryBusy = false,
+  galleryNotice = null,
   onRedraw,
   onOpenGallery,
 }: {
@@ -59,6 +61,9 @@ export function ResultScreen({
   remaining: number
   inGallery: boolean
   onToggleGallery: (next: boolean) => void
+  /** A flip is in flight — stops a double-tap firing two opposite requests. */
+  galleryBusy?: boolean
+  galleryNotice?: string | null
   onRedraw: () => void
   onOpenGallery: () => void
 }) {
@@ -119,10 +124,17 @@ export function ResultScreen({
           <input
             type="checkbox"
             checked={inGallery}
+            disabled={galleryBusy}
             onChange={(e) => onToggleGallery(e.target.checked)}
-            className="h-6 w-11 appearance-none rounded-full bg-gray-200 transition-colors checked:bg-brand-500 relative before:absolute before:top-0.5 before:left-0.5 before:h-5 before:w-5 before:rounded-full before:bg-white before:transition-transform checked:before:translate-x-5"
+            className="h-6 w-11 appearance-none rounded-full bg-gray-200 transition-colors checked:bg-brand-500 relative before:absolute before:top-0.5 before:left-0.5 before:h-5 before:w-5 before:rounded-full before:bg-white before:transition-transform checked:before:translate-x-5 disabled:opacity-50"
           />
         </label>
+
+        {galleryNotice && (
+          <p className="mx-auto mt-2 w-full max-w-md rounded-2xl bg-amber-50 px-4 py-2.5 text-[13px] leading-relaxed text-amber-900">
+            {galleryNotice}
+          </p>
+        )}
 
         {hint && (
           <p className="mx-auto mt-3 max-w-md rounded-2xl bg-amber-50 px-4 py-3 text-[14px] leading-relaxed text-amber-900">

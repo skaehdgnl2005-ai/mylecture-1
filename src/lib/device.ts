@@ -49,10 +49,25 @@ function safeLocalSet(value: string) {
   }
 }
 
+/**
+ * Read the device id WITHOUT minting one.
+ *
+ * getDeviceId() creates a UUID when none exists. That is right on /s/[code] —
+ * joining is the moment an identity is born — and wrong on /g/[code]: the
+ * teacher's laptop and the projector open the gallery too, and neither should
+ * acquire an identity, or ask the server "which pictures are mine?", merely by
+ * looking at the class's work.
+ */
+export function peekDeviceId(): string | null {
+  const fromLocal = safeLocalGet()
+  const fromCookie = readCookie(KEY)
+  return [fromLocal, fromCookie].find((v) => v && UUID_RE.test(v)) ?? null
+}
+
 export function getDeviceId(): string {
   const fromLocal = safeLocalGet()
   const fromCookie = readCookie(KEY)
-  const existing = [fromLocal, fromCookie].find((v) => v && UUID_RE.test(v))
+  const existing = peekDeviceId()
 
   if (existing) {
     // Heal whichever store lost it.

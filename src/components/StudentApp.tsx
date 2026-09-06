@@ -37,6 +37,11 @@ export function StudentApp({
   const [etaSec, setEtaSec] = useState(60)
   const [elapsed, setElapsed] = useState(0)
   const [result, setResult] = useState<{ imageId: string; imageUrl: string; tags: string[]; inGallery: boolean } | null>(null)
+  const [galleryBusy, setGalleryBusy] = useState(false)
+  const [galleryNotice, setGalleryNotice] = useState<string | null>(null)
+  /** Which picture the result screen is currently showing, so a late gallery
+   *  request cannot report its outcome against the next one. */
+  const shownImageId = useRef<string | null>(null)
 
   const deviceId = useRef<string>('')
   // Minted once per attempt so a double-tap, a retried fetch, or flaky wifi
@@ -98,6 +103,7 @@ export function StudentApp({
 
         if (d.status === 'done') {
           stop = true
+          shownImageId.current = d.imageId
           setResult({ imageId: d.imageId, imageUrl: d.imageUrl, tags: d.tags ?? [], inGallery: d.inGallery ?? true })
           setInfo((p) => (p ? { ...p, used: p.used + 1, remaining: Math.max(0, p.remaining - 1) } : p))
           setPhase('result')
@@ -165,17 +171,38 @@ export function StudentApp({
     [code],
   )
 
-  const toggleGallery = async (next: boolean) => {
-    if (!result) return
-    setResult({ ...result, inGallery: next })
-    if (!next) {
-      await fetch(`/api/gallery/image/${result.imageId}`, {
-        method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ deviceId: deviceId.current }),
-      }).catch(() => {})
-    }
-  }
+  const toggleGallery = useCallback(
+    async (next: boolean) => {
+      const imageId = result?.imageId
+      if (!imageId || galleryBusy) return
+      setGalleryBusy(true)
+      setGalleryNotice(null)
+      // Optimistic: the switch has to move under the thumb, not after a round trip.
+      setResult((p) => (p ? { ...p, inGallery: next } : p))
+      try {
+        // This used to send a request ONLY when turning the switch OFF. Turning
+        // it back ON changed local state and nothing else, so the picture stayed
+        // out of the gallery while this screen claimed it was in. Both directions
+        // now go to the server, and the server is what decides.
+        const res = await fetch(`/api/gallery/image/${imageId}`, {
+          method: next ? 'PUT' : 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ deviceId: deviceId.current }),
+        })
+        if (!res.ok) throw new Error(String(res.status))
+      } catch {
+        // Scoped to the picture the request was issued for. Without this check a
+        // slow request from picture 1 could revert the switch — and post an error
+        // about it — on picture 2's result screen after 다시 그리기.
+        if (shownImageId.current !== imageId) return
+        setResult((p) => (p && p.imageId === imageId ? { ...p, inGallery: !next } : p))
+        setGalleryNotice('잠깐 안 됐어요. 다시 눌러 주세요.')
+      } finally {
+        setGalleryBusy(false)
+      }
+    },
+    [result?.imageId, galleryBusy],
+  )
 
   if (phase === 'loading') {
     return (
@@ -209,8 +236,16 @@ export function StudentApp({
         inGallery={result.inGallery}
         remaining={info?.remaining ?? 0}
         onToggleGallery={toggleGallery}
+        galleryBusy={galleryBusy}
+        galleryNotice={galleryNotice}
         onRedraw={() => {
           idemKey.current = newIdempotencyKey()
+          // Every piece of the previous picture's gallery state is cleared here.
+          // Leaving galleryBusy set would arrive at the next result screen with a
+          // permanently disabled switch.
+          shownImageId.current = null
+          setGalleryNotice(null)
+          setGalleryBusy(false)
           setResult(null)
           setJobId(null)
           setPhase('form')
