@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { clsx } from 'clsx'
 import {
   PLACE_CHIPS, COMPANION_CHIPS, MOOD_CHIPS, TIME_CHIPS, STYLE_CARDS,
@@ -32,6 +32,8 @@ export function StepForm({
   onSubmit,
   submitting,
   error,
+  initialValue,
+  onChange,
 }: {
   allowedStyles: string[]
   styleSamples: Record<string, string | null>
@@ -39,12 +41,42 @@ export function StepForm({
   submitting: boolean
   /** Set when the server rejected a submission; jumps back to the right step. */
   error: { field: 1 | 2 | null; message: string; helpline?: boolean } | null
+  /**
+   * Answers to start from. StudentApp keeps them, because this component
+   * unmounts while the waiting screen is up: a generation that fails after that
+   * used to drop the student back onto five empty questions, with no idea which
+   * one to change.
+   */
+  initialValue?: FormValue
+  onChange?: (v: FormValue) => void
 }) {
-  const [step, setStep] = useState(0)
-  const [v, setV] = useState<FormValue>(EMPTY)
+  // Where to open. A first visit starts at question 1. Coming BACK from a failed
+  // generation, open the question the server blamed — or, when it blamed nothing
+  // in particular, the last step, where 그림 그리기 is and where one tap retries.
+  const [step, setStep] = useState(() => {
+    if (!error) return 0
+    return error.field ? error.field - 1 : TOTAL - 1
+  })
+  const [v, setV] = useState<FormValue>(initialValue ?? EMPTY)
 
   const set = <K extends keyof FormValue>(k: K, value: FormValue[K]) =>
     setV((prev) => ({ ...prev, [k]: value }))
+
+  // Hand the answers up so they survive this component unmounting while the
+  // waiting screen is shown. Kept in an effect rather than inside `set` so the
+  // state updater stays pure.
+  useEffect(() => {
+    onChange?.(v)
+  }, [v, onChange])
+
+  // A NEW rejection arriving while the form is already up — the safety pipeline
+  // answers before any job exists, so the component never unmounted in that
+  // case. Jump to the question the server blamed.
+  const lastError = useRef(error)
+  useEffect(() => {
+    if (error && error !== lastError.current && error.field) setStep(error.field - 1)
+    lastError.current = error
+  }, [error])
 
   const canAdvance = [
     v.rawText.trim().length > 0,

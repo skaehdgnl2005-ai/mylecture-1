@@ -31,6 +31,9 @@ export function StudentApp({
   const [blockedMsg, setBlockedMsg] = useState('')
   const [error, setError] = useState<{ field: 1 | 2 | null; message: string; helpline?: boolean } | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  /** The student's answers, held above StepForm so a failed generation does not
+   *  wipe them (StepForm unmounts while the waiting screen is up). */
+  const [draft, setDraft] = useState<FormValue | null>(null)
 
   const [jobId, setJobId] = useState<string | null>(null)
   const [position, setPosition] = useState(1)
@@ -246,6 +249,9 @@ export function StudentApp({
           shownImageId.current = null
           setGalleryNotice(null)
           setGalleryBusy(false)
+          // A second picture starts blank. Answers are only preserved across a
+          // FAILURE, where retyping them is a punishment for the app's problem.
+          setDraft(null)
           setResult(null)
           setJobId(null)
           setPhase('form')
@@ -262,6 +268,11 @@ export function StudentApp({
       onSubmit={submit}
       submitting={submitting}
       error={error}
+      // The answers live here, not in StepForm, because StepForm unmounts while
+      // the waiting screen is up. A generation that fails after that used to
+      // return the student to five empty questions.
+      initialValue={draft ?? undefined}
+      onChange={setDraft}
     />
   )
 }
