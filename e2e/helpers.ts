@@ -3,13 +3,23 @@ import { type APIRequestContext, type Page, expect } from '@playwright/test'
 export const PASSWORD = process.env.TEACHER_PASSWORD ?? 'test1234'
 
 /**
+ * Where auth.setup.ts parks the teacher cookie, and where every project picks
+ * it up from (playwright.config.ts `use.storageState`). Gitignored.
+ */
+export const TEACHER_STATE = 'e2e/.auth/teacher.json'
+
+/**
  * Logs in only if this context is not already authenticated.
  *
- * The login route rate-limits to 10 attempts per minute and every local request
- * shares the key 'local' (there is one shared password — that limit is the
- * product working as intended). A suite that re-logs-in per test trips it and
- * starts failing on '잠시 뒤 다시 시도해 주세요', which looks like an auth bug and
- * is not one. The teacher cookie lasts a school day, so once is enough.
+ * Normally it does nothing at all: auth.setup.ts logs in once per run and every
+ * context starts from that saved cookie, so the `ok()` check below short
+ * circuits. The POST is the fallback for a context that has genuinely lost it.
+ *
+ * That arrangement exists because the login route rate-limits to 10 attempts a
+ * minute and every local request shares the key 'local' (one shared password —
+ * that limit is the product working as intended). A suite that re-logs-in per
+ * test trips it and starts failing on '잠시 뒤 다시 시도해 주세요', which looks
+ * like an auth bug and is not one.
  */
 export async function teacherLogin(request: APIRequestContext) {
   if ((await request.get('/api/teacher/sessions')).ok()) return

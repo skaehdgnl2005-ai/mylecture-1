@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { TEACHER_STATE } from './e2e/helpers'
 
 /**
  * PRD §9 acceptance criteria that are cross-page or multi-actor flows — the
@@ -23,10 +24,19 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
+    // Authenticates once and saves the cookie; see e2e/auth.setup.ts for why
+    // that matters (the login route allows ten attempts a minute, and a suite
+    // that logs in per test eventually trips it and reports it as an auth bug).
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
     {
       name: 'mobile',
+      dependencies: ['setup'],
       // 360px wide is the PRD §7 design target.
-      use: { ...devices['Pixel 7'], viewport: { width: 360, height: 780 } },
+      use: {
+        ...devices['Pixel 7'],
+        viewport: { width: 360, height: 780 },
+        storageState: TEACHER_STATE,
+      },
     },
   ],
 })
