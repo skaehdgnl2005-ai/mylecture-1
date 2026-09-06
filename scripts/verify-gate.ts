@@ -17,9 +17,19 @@
  * or a plain Postgres:
  *   PGURL=postgres://postgres:test@localhost:55432/mirae pnpm tsx scripts/verify-gate.ts
  */
+import 'dotenv/config'
+import { config } from 'dotenv'
 import { Client, Pool } from 'pg'
 
-const URL = process.env.PGURL ?? 'postgres://postgres:test@localhost:55432/mirae'
+config({ path: '.env.local', override: true })
+
+// Falls back to the connection string `pnpm db:push` already uses, so the
+// command in README works with no extra environment variable. PGURL still wins
+// when you are pointing at some other database on purpose.
+const URL =
+  process.env.PGURL ??
+  process.env.SUPABASE_DB_URL ??
+  'postgres://postgres:postgres@127.0.0.1:55322/postgres'
 const pool = new Pool({ connectionString: URL, max: 30 })
 
 let failures = 0

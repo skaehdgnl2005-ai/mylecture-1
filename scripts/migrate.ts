@@ -10,9 +10,16 @@
  * on the last good migration rather than half-applied.
  */
 import 'dotenv/config'
+import { config } from 'dotenv'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Client } from 'pg'
+
+// .env.local is where README tells you to put SUPABASE_DB_URL, and dotenv/config
+// only reads .env. Loading it here is what makes the documented sequence
+//   npx supabase start && pnpm db:push
+// actually work.
+config({ path: '.env.local', override: true })
 
 const DIR = path.join(process.cwd(), 'supabase', 'migrations')
 
@@ -29,7 +36,18 @@ async function main() {
     process.exit(1)
   }
 
-  const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } })
+  // Hosted Supabase requires TLS and presents a certificate this client will not
+  // have a root for; `supabase start` serves plain TCP and REJECTS a TLS
+  // handshake outright ('The server does not support SSL connections'). So the
+  // flag follows the host, not the environment.
+  const host = (() => {
+    try { return new URL(url).hostname } catch { return '' }
+  })()
+  const isLocal = host === '127.0.0.1' || host === 'localhost' || host === '::1'
+  const client = new Client({
+    connectionString: url,
+    ssl: isLocal ? false : { rejectUnauthorized: false },
+  })
   await client.connect()
 
   try {
