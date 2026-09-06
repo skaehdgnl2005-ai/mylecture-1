@@ -10,9 +10,12 @@ import { env } from './env'
  * claim_job(), so an extra tick is wasteful at worst, never incorrect — and the
  * tick lease makes even the waste small.
  *
- * Deliberately fire-and-forget: the poll response must not wait on it. We do
- * NOT use `after()` here — on Vercel it shares the route's maxDuration and buys
- * nothing, and the worker route needs its own 300s budget anyway.
+ * Deliberately fire-and-forget: the poll response must not wait on it.
+ *
+ * The 1.5s timeout only releases THIS request. It is safe because the worker
+ * route replies 202 immediately and does its draining in after(), so aborting
+ * here cannot cut the drain short. (It could, before — the worker used to run
+ * inside the request, and this abort was silently capping every tick at ~1.5s.)
  */
 export function kickWorker(): void {
   const base = env().APP_URL
