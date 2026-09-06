@@ -1,4 +1,5 @@
 import 'server-only'
+import type { ImagesResponse, ImageGenerateParamsNonStreaming } from 'openai/resources/images'
 import { openai } from './client'
 import { env } from '@/lib/env'
 import { assertPromptIsClean } from '@/lib/prompt/build-image-prompt'
@@ -29,15 +30,18 @@ export async function generateImage(
   assertPromptIsClean(prompt) // belt and braces; the builder already checked
 
   const cfg = env()
-  const res = await openai().images.generate({
+  // `stream: false` is explicit so the SDK's overload resolves to the
+  // non-streaming ImagesResponse rather than the Stream union.
+  const res: ImagesResponse = await openai().images.generate({
     model: cfg.IMAGE_MODEL,
     prompt,
     n: 1,
-    size: cfg.IMAGE_SIZE as '1024x1536',
-    quality: (opts.quality ?? cfg.IMAGE_QUALITY) as 'medium',
+    stream: false,
+    size: cfg.IMAGE_SIZE as ImageGenerateParamsNonStreaming['size'],
+    quality: (opts.quality ?? cfg.IMAGE_QUALITY) as ImageGenerateParamsNonStreaming['quality'],
     output_format: 'jpeg', // documented as faster than png; ~halves the payload
     moderation: 'auto',
-  } as Parameters<ReturnType<typeof openai>['images']['generate']>[0])
+  })
 
   const datum = res.data?.[0]
   if (!datum?.b64_json) {
