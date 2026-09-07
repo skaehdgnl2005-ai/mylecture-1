@@ -10,12 +10,40 @@ README.md, RUNBOOK.md, HANDOFF.md 를 먼저 읽어주세요. (PRD는 필요할 
 구현돼 있습니다.)
 
 ## 현재 상태
-Next.js 16 + Supabase + Vercel Hobby. 커밋 32개. PRD 전 기능 구현 + 화면 연결 완료.
-로컬 검증 기준선: 단위 91 / API 스모크 86 / Playwright 19 / verify-gate SQL 불변식 —
+Next.js 16 + Supabase + Vercel Hobby. PRD 전 기능 구현 + 화면 연결 완료.
+로컬 검증 기준선: 단위 103 / API 스모크 92 / Playwright 19 / verify-gate SQL 불변식 —
 전부 PASS. 작업 후 이 숫자가 줄면 회귀입니다.
+(단위 91 -> 103, 스모크 86 -> 92 는 아래 '고친 것' 항목에서 늘어난 검증입니다.)
 
 **코드는 끝났습니다. 이번 세션은 기능 추가가 아니라 실제 인프라에 올리는 세션입니다.**
 아래 1~3은 제 자격증명이 필요하니, 값을 어디서 가져와야 하는지 알려주시면 제가 붙여넣겠습니다.
+
+## 배포 상태 (이 프롬프트를 쓴 세션에서 실제로 한 것)
+
+Supabase는 **끝났습니다**. 마이그레이션 0001~0008 적용, `drawings` public 버킷 생성,
+pg_cron 1.6.4 / pg_net 0.20.4 활성, `pump-worker` 가 '10 seconds' 로 등록됨,
+Postgres 17.6, Vault `app_url` / `worker_secret` 생성 완료.
+Vercel 주소가 바뀌지 않는 한 여기는 다시 할 것이 없습니다.
+
+배포에서 실제로 걸린 것 세 가지 — 셋 다 증상만으로는 원인을 못 찾습니다.
+
+1. **Direct connection 은 IPv6 전용입니다.** `db.<ref>.supabase.co` 에 A 레코드가 없어
+   IPv4 회선에서는 `pnpm db:push` 가 `ENOTFOUND` 로 죽습니다. Connect 모달에서
+   **Session pooler**(포트 5432, 사용자명이 `postgres.<ref>` 로 바뀜)를 쓰세요.
+   Transaction pooler(6543)는 마이그레이션에 부적합합니다.
+   앱에는 영향이 없습니다 — 앱은 PostgREST를 HTTPS로 탑니다.
+
+2. **APP_URL 을 안 고치면 QR 코드가 죽습니다.** 이건 '보조 펌프가 안 돈다' 정도의
+   문제가 아닙니다. `/api/teacher/qr` 이 `env().APP_URL ?? url.origin` 으로 학생이 찍을
+   주소를 만듭니다. 자리표시자인 채로 배포하면 교실 전체가 존재하지 않는 도메인을
+   찍습니다. 사이트를 열어봐서는 절대 안 보이고, 점검 다섯 줄도 전부 초록입니다.
+   확인법: `uqr` 의 `renderSVG(base + '/s/' + code, { ecc: 'M', border: 2 })` 로 후보
+   URL의 QR을 직접 그려 `/api/teacher/qr` 응답과 문자열 비교하면 됩니다.
+
+3. **Vercel 은 배포 대상 커밋의 작성자 이메일을 GitHub 계정과 대조합니다.**
+   맞지 않으면 빌드가 시작조차 하지 않고 `UNKNOWN` 으로 남습니다 — 빌드 로그도 없고
+   CLI 는 `Building…` 에서 멈춘 것처럼 보입니다. 대시보드에만 이유가 뜹니다.
+   `git config user.email` 이 GitHub 에 등록·인증된 주소인지 먼저 확인하세요.
 
 ## 이번 세션 작업 (순서대로)
 
@@ -96,11 +124,11 @@ Next.js 16 + Supabase + Vercel Hobby. 커밋 32개. PRD 전 기능 구현 + 화�
 ## 로컬 실행 (회귀 확인용)
 npx supabase start   # CLI 2.101.0이면 config.toml의 [local_smtp]를 못 읽습니다.
                      # CLI를 2.116+ 로 올리세요(그 줄을 [inbucket]으로 바꾸는 건 임시방편).
-pnpm db:push         # 0007까지 적용
+pnpm db:push         # 0008까지 적용
 # Storage에 'drawings' public 버킷 (없으면 수업 전 점검이 알려줌)
 pnpm build && pnpm start
-pnpm test                        # 91
-pnpm tsx scripts/smoke.ts        # 86  ← 로컬 전용. 프로덕션에 돌리지 말 것
+pnpm test                        # 103
+pnpm tsx scripts/smoke.ts        # 92  ← 로컬 전용. 프로덕션에 돌리지 말 것
 npx playwright test              # 19
 pnpm tsx scripts/verify-gate.ts  # 앱 서버를 끄고 돌릴 것
 
