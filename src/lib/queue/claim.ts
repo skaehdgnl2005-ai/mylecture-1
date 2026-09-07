@@ -1,6 +1,7 @@
 import 'server-only'
 import { db, type JobRow, type SessionRow } from '@/lib/db'
 import { env, spacingMs } from '@/lib/env'
+import { claimedRow } from './claimed-row'
 
 /**
  * Thin, typed wrappers over the SQL in 0002_claim_job.sql. All of the
@@ -21,7 +22,7 @@ export async function claimJob(session: Pick<SessionRow, 'per_minute_limit' | 'q
     p_order: session.queue_order,
   })
   if (error) throw new Error(`claim_job failed: ${error.message}`)
-  return (data as JobRow | null) ?? null
+  return claimedRow(data)
 }
 
 export async function msUntilSlot(): Promise<number> {
