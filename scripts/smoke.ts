@@ -66,6 +66,34 @@ const submit = (code: string, deviceId: string, rawText: string, idem: string, e
     }),
   })
 
+type LiveStats = { done: number; queued: number; running: number; estimatedCostUsd: number }
+
+const liveStats = async (): Promise<LiveStats | null> =>
+  ((await api('/api/teacher/sessions')).body.stats as LiveStats | null) ?? null
+
+/**
+ * Pump the worker until nothing is queued or running.
+ *
+ * Any check that compares two counts taken at different moments is otherwise
+ * racing the queue: at OPENAI_IPM=5 the pacer releases one picture every ~13s,
+ * so work an earlier section left behind keeps completing underneath the next
+ * one — and polling a job is itself what wakes the worker. This is what makes a
+ * cost snapshot mean what it says. 'tick' is fire-and-forget, so the loop is
+ * cheap.
+ */
+async function drainQueue(timeoutMs = 180_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const s = await liveStats()
+    if (!s || (s.queued === 0 && s.running === 0)) return true
+    await api('/api/teacher/queue', {
+      method: 'POST', body: JSON.stringify({ action: 'tick' }),
+    })
+    await new Promise((r) => setTimeout(r, 1500))
+  }
+  return false
+}
+
 async function main() {
   console.log(`\nSmoke test  ${BASE}\n`)
 
@@ -154,6 +182,22 @@ async function main() {
   let queued = 1
   while (Date.now() < deadline && queued > 0) {
     await new Promise((r) => setTimeout(r, 2000))
+    // Wake the worker on every pass. GET /api/teacher/queue deliberately does
+    // NOT pump (README: the dashboard's refresh only redraws), and this script
+    // does not poll a job's status here — so the only thing draining the queue
+    // was the single tick that POST /api/jobs kicked off at submit time. That
+    // tick stops at SOFT_DEADLINE_MS = 240s, and when it did, this loop sat
+    // watching an OPEN pacer slot and a non-empty queue with nothing running:
+    // observed as 'done=1 pending=3' for the full 180s, about one run in three.
+    //
+    // In production pg_cron pumps every 10s and this cannot happen. It happens
+    // locally because pump_worker() reads app_url and worker_secret out of
+    // Vault and returns silently when they are unset — which is also exactly
+    // what a deploy with an unset Vault app_url looks like from outside:
+    // work queued, slot open, nothing running.
+    await api('/api/teacher/queue', {
+      method: 'POST', body: JSON.stringify({ action: 'tick' }),
+    })
     const q = await api(`/api/teacher/queue?code=${LIVE}`)
     const jobs = q.body.jobs as Array<{ status: string }>
     done = jobs.filter((j) => j.status === 'done').length
@@ -463,7 +507,11 @@ async function main() {
   // stops the wrong one drifting back in — the teacher's 예상 비용 and the price
   // printed on the 화질 buttons are both this constant.
   console.log('\n15. 화질')
-  const doneNow = ((await api('/api/teacher/sessions')).body.stats as { done: number }).done
+  // Settle the queue before snapshotting. Everything finished in this lesson so
+  // far was drawn at 'medium'; if leftovers are still trickling in they will be
+  // drawn at 'high' a moment from now and this snapshot would be stale.
+  check('the queue settles before the cost is measured', await drainQueue())
+  const doneNow = (await liveStats())!.done
 
   const toHigh = await api(`/api/teacher/sessions/${LIVE}`, {
     method: 'PATCH', body: JSON.stringify({ imageQuality: 'high' }),
@@ -473,23 +521,58 @@ async function main() {
     (toHigh.body.session as { image_quality: string })?.image_quality === 'high',
     String((toHigh.body.session as { image_quality: string })?.image_quality),
   )
-  const highCost = ((await api('/api/teacher/sessions')).body.stats as { estimatedCostUsd: number })
-    .estimatedCostUsd
+  // Everything drawn so far in this lesson was drawn at 'medium'. Switching the
+  // session to 'high' must NOT re-price it: the money was already spent at the
+  // old quality. This check used to assert the opposite — doneNow x $0.165 —
+  // which is precisely the bug migration 0008 closes. A teacher who tapped 높음
+  // at minute 8 watched minutes 0-7 jump 33x and had to decide, on that number,
+  // whether they could afford to finish the lesson.
+  const cost = async () => (await liveStats())!.estimatedCostUsd
+
+  const highCost = await cost()
   check(
-    '  예상 비용 uses $0.165 per image at high',
-    highCost === Math.round(doneNow * 0.165 * 100) / 100,
-    `${highCost} for ${doneNow} images`,
+    '  a mid-lesson 화질 change does not re-price finished pictures',
+    highCost === Math.round(doneNow * 0.041 * 100) / 100,
+    `${highCost} for ${doneNow} drawn at medium`,
   )
 
+  // The other half of the same claim: a picture drawn AFTER the switch really is
+  // billed at high. Without this, the check above would also pass if the console
+  // had simply stopped counting.
+  await api(`/api/teacher/sessions/${LIVE}`, {
+    method: 'PATCH', body: JSON.stringify({ totalLimit: 50 }),
+  })
+  const hqSubmit = await submit(LIVE, randomUUID(), '도서관에서 책을 고르고 있어요', randomUUID())
+  check('a picture can be submitted at high', hqSubmit.body.ok === true, String(hqSubmit.body.message ?? ''))
+
+  check('  the queue settles again', await drainQueue())
+  const hqStatus = String((await api(`/api/jobs/${hqSubmit.body.jobId}`)).body.status)
+  check('  and it is drawn', hqStatus === 'done', hqStatus)
+
+  // The queue was empty on both sides of the submit, so this is exactly the one
+  // picture — nothing left over can have slipped into the difference.
+  const drawnAtHigh = (await liveStats())!.done - doneNow
+  check('  exactly one picture was drawn at high', drawnAtHigh === 1, String(drawnAtHigh))
+
+  const mixedCost = await cost()
+  const expectedMixed = Math.round((doneNow * 0.041 + drawnAtHigh * 0.165) * 100) / 100
+  check(
+    '  pictures drawn at high cost $0.165, the earlier ones still $0.041',
+    mixedCost === expectedMixed,
+    `${mixedCost} vs ${expectedMixed} (${doneNow} medium + ${drawnAtHigh} high)`,
+  )
+
+  // And back down: dropping to medium must not refund the high picture either.
+  // The prices are still pinned here — $0.041 was the PRD's figure against the
+  // $0.045 the code used to carry, and $0.165 is the 높음 button's number.
   await api(`/api/teacher/sessions/${LIVE}`, {
     method: 'PATCH', body: JSON.stringify({ imageQuality: 'medium' }),
   })
-  const medCost = ((await api('/api/teacher/sessions')).body.stats as { estimatedCostUsd: number })
-    .estimatedCostUsd
+  const medCost = await cost()
   check(
-    '  and $0.041 at medium (PRD §5-2, not the $0.045 the code used to carry)',
-    medCost === Math.round(doneNow * 0.041 * 100) / 100,
-    `${medCost} for ${doneNow} images`,
+    '  and switching back to medium does not refund it (PRD §5-2 prices)',
+    medCost === expectedMixed,
+    `${medCost} vs ${expectedMixed}`,
   )
 
   const badQuality = await api(`/api/teacher/sessions/${LIVE}`, {
