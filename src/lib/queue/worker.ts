@@ -210,7 +210,16 @@ export async function tick(now = Date.now()): Promise<TickSummary> {
     summary.claimed++
     // Reload the session each claim so a mid-lesson settings change (quality,
     // per-minute cap, queue order) takes effect without a redeploy.
-    const fresh = (await loadSession(session.code)) ?? session
+    //
+    // Keyed on the JOB's session, not this tick's. claim_job() is a global gate
+    // — it takes no session code and hands back whatever is next in the whole
+    // queue — while a tick can live for SOFT_DEADLINE_MS. So a tick that woke
+    // under the previous lesson is still claiming after 새 수업 시작 closes it,
+    // and it was drawing the new lesson's first pictures with the OLD lesson's
+    // settings: the teacher set 낮음 for today and the first few came back at
+    // yesterday's 높음, at 4x the price. Reading the job's own session is what
+    // makes the recorded quality (0008) the one that was actually asked for.
+    const fresh = (await loadSession(job.session_code)) ?? session
 
     const p = processJob(job, fresh)
       .then((r) => {
