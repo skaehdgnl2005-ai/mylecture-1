@@ -33,3 +33,34 @@ export function costPerImageUsd(quality: string): number {
 export function estimateCostUsd(images: number, quality: string): number {
   return Math.round(images * costPerImageUsd(quality) * 100) / 100
 }
+
+/**
+ * What a session's finished pictures actually cost, from a per-row tally.
+ *
+ * `estimateCostUsd(done, session.image_quality)` above prices every finished
+ * picture at whatever quality the session is set to RIGHT NOW. Quality is a
+ * mid-lesson setting, so that made the console re-price pictures backwards: a
+ * teacher who switched low -> high at minute 8 watched the 20 pictures already
+ * drawn jump from $0.10 to $3.30. Nothing had been spent; the number the
+ * teacher uses to decide whether they can finish the lesson was simply wrong.
+ *
+ * Migration 0008 writes the quality onto each job row when it is drawn, so the
+ * honest total is a sum over rows. `counts` is keyed by quality, as returned by
+ * the session_quality_counts() function.
+ *
+ * `fallbackQuality` prices the 'unknown' bucket — rows finished before the
+ * column was being written. That is the old approximation, now confined to the
+ * rows where there is genuinely nothing recorded, instead of applied to all of
+ * them.
+ */
+export function sumCostUsd(
+  counts: Record<string, number>,
+  fallbackQuality: string,
+): number {
+  let total = 0
+  for (const [quality, n] of Object.entries(counts)) {
+    if (!Number.isFinite(n) || n <= 0) continue
+    total += n * costPerImageUsd(quality === 'unknown' ? fallbackQuality : quality)
+  }
+  return Math.round(total * 100) / 100
+}

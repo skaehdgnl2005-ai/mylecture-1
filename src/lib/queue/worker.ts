@@ -53,10 +53,22 @@ async function anyOpenSession(): Promise<SessionRow | null> {
   return (data as SessionRow | null) ?? null
 }
 
-async function finishOk(job: JobRow, url: string, path: string, tags: string[]): Promise<void> {
+async function finishOk(
+  job: JobRow,
+  url: string,
+  path: string,
+  tags: string[],
+  quality: string,
+): Promise<void> {
   // raw_text_ko is NULLed here. Once the English clause exists the Korean
   // original has no function, and it is the highest-risk field in the system —
   // it must not also have the longest lifetime.
+  //
+  // image_quality is written in the SAME statement, and it is the quality this
+  // picture was ACTUALLY drawn at — the value passed to generateImage() a few
+  // lines up, not whatever the session says by the time the teacher looks. The
+  // console sums these per row (migration 0008), so a mid-lesson 화질 change no
+  // longer re-prices pictures that are already finished.
   await db()
     .from('jobs')
     .update({
@@ -64,6 +76,7 @@ async function finishOk(job: JobRow, url: string, path: string, tags: string[]):
       finished_at: new Date().toISOString(),
       lease_expires_at: null,
       raw_text_ko: null,
+      image_quality: quality,
     })
     .eq('id', job.id)
 
@@ -134,10 +147,13 @@ async function processJob(job: JobRow, session: SessionRow): Promise<'done' | 'f
       await db().from('jobs').update({ prompt }).eq('id', job.id)
     }
 
-    const image = await generateImage(prompt, { quality: session.image_quality })
+    // Read once and reuse: the same value goes to the API and onto the row, so
+    // the recorded quality cannot disagree with the picture that was billed.
+    const quality = session.image_quality
+    const image = await generateImage(prompt, { quality })
     const key = imageKey(job.session_code, image.extension)
     const { url, path } = await uploadImage(key, image.bytes, image.contentType)
-    await finishOk(job, url, path, buildGalleryTags(inputs))
+    await finishOk(job, url, path, buildGalleryTags(inputs), quality)
     return 'done'
   } catch (err) {
     const f = classifyImageError(err)

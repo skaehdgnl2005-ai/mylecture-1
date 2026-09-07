@@ -49,6 +49,8 @@ export interface JobRow {
   visible_detail_en: string | null
   prompt: string | null
   status: 'queued' | 'running' | 'done' | 'failed'
+  /** Quality this picture was drawn at. NULL until it is drawn. See 0008. */
+  image_quality: 'low' | 'medium' | 'high' | null
   tries: number
   next_attempt_at: string
   lease_expires_at: string | null

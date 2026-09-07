@@ -66,11 +66,13 @@ export async function generateImage(
  * `medium` used to be $0.045 here against $0.041 in the PRD. See lib/pricing.ts
  * for which one OpenAI's price list agrees with.
  *
- * KNOWN IMPRECISION: the console costs every finished picture at the session's
- * CURRENT quality, so changing quality mid-lesson re-prices pictures that were
- * already drawn. Making it exact means recording the quality on each job row.
+ * The console no longer costs finished pictures at the session's CURRENT
+ * quality — that made a mid-lesson change re-price pictures already drawn.
+ * Migration 0008 records the quality on each job row and the console sums per
+ * row via `sumCostUsd`. `estimateCostUsd` remains for FORWARD estimates, where
+ * the current quality is the right one to multiply by.
  */
-export { estimateCostUsd } from '@/lib/pricing'
+export { estimateCostUsd, sumCostUsd } from '@/lib/pricing'
 
 /**
  * Deterministic stand-in used only when MOCK_OPENAI=1.

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { db, logEvent, type SessionRow } from '@/lib/db'
 import { requireTeacher, newSessionCode } from '@/lib/auth'
 import { env, spacingMs } from '@/lib/env'
-import { estimateCostUsd } from '@/lib/openai/image'
+import { sumCostUsd } from '@/lib/openai/image'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,12 +49,25 @@ export async function GET() {
       .select('id', { count: 'exact', head: true })
       .eq('session_code', active.code)
 
+    // Per-row tally, not done_count x current quality. 화질 is a mid-lesson
+    // setting, so multiplying by the CURRENT value re-priced pictures that had
+    // already been drawn — a teacher tapping 높음 at minute 8 watched the cost
+    // of minutes 0-7 jump 33x. Migration 0008 records what each picture was
+    // actually drawn at; this sums those.
+    const { data: qc } = await db().rpc('session_quality_counts', {
+      p_session_code: active.code,
+    })
+    const qualityCounts: Record<string, number> = {}
+    for (const row of (qc ?? []) as Array<{ quality: string; n: number }>) {
+      qualityCounts[row.quality] = Number(row.n)
+    }
+
     const pending = map.queued + map.running
     stats = {
       ...map,
       devices: devices ?? 0,
       observedIpm: lastMinute ?? 0,
-      estimatedCostUsd: estimateCostUsd(map.done, active.image_quality),
+      estimatedCostUsd: sumCostUsd(qualityCounts, active.image_quality),
       // Honest remaining-time estimate at the real ceiling.
       etaMinutes:
         pending === 0
