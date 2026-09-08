@@ -23,3 +23,5 @@ playwright-report/
 
 # Playwright saves the teacher cookie here (e2e/auth.setup.ts).
 e2e/.auth/
+
+.vercel

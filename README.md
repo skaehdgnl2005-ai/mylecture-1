@@ -3,6 +3,10 @@
 중학생이 폰으로 접속해 5스텝 폼을 채우면 "10년 뒤 가장 행복한 어느 하루의 한 장면"을 그려주고,
 반 전체가 익명 갤러리로 함께 감상하는 수업용 웹앱.
 
+> A classroom web app where middle-schoolers fill a 5-step form on their phones, get an AI picture of "a happy day 10 years from now", and view the whole class's pictures in an anonymous gallery. Postgres is both the job queue and the rate limiter.
+
+**배포**: https://mylecture-1.vercel.app (Vercel 프로덕션, Supabase pg_cron 워커)
+
 구현 대상 사양은 [PRD](./PRD_10년뒤_나_그림생성_웹앱.md), 수업 당일 절차는 [RUNBOOK.md](./RUNBOOK.md).
 
 ---
@@ -44,6 +48,29 @@ Postgres가 큐이자 속도 게이트입니다. 학생이 제출하면 `jobs` �
 왜 이 방식인지, 어떤 대안을 왜 기각했는지는 구현 계획서에 근거와 함께 정리돼 있습니다.
 
 ---
+
+## 어떻게 검증했나
+
+| 층 | 도구 | 내용 |
+|---|---|---|
+| 단위 | Vitest | 금칙어·프롬프트·오류 분류·백오프·칩 동기화 (`pnpm test`) |
+| 수용 | Playwright | PRD §9 수용 기준 + 교사 패널 · 갤러리 내리기 (`pnpm e2e`) |
+| API 스모크 | 자체 스크립트 | 배포 후 라우트별 상태 확인 (`pnpm smoke`) |
+| 부하 | `scripts/load-test.ts` | 20건 동시 제출 → 큐 드레인, 분당 상한·동시 상한 게이트 |
+| 교실 시뮬레이션 | `scripts/classroom-sim.ts` | 30대 폰이 실제 클라이언트와 같은 간격으로 입장·제출·폴링·갤러리 이동 |
+
+**2026-09-07 실제 프로덕션 교실 시뮬레이션** ([전문](./docs/load-test-report-2026-09-07.md), 실제 OpenAI, 약 $2.7 / 65장):
+
+| 항목 | 값 |
+|---|---|
+| 입장 성공 | 30 / 30 |
+| 그림 완료 / 실패 | 60 / 0 |
+| 5xx · 타임아웃 | 0 (요청 약 7,100건) |
+| 분당 실제 생성 게이트 | 5 ≤ 5 PASS |
+| 최대 동시 생성 게이트 | 4 ≤ 4 PASS |
+| 첫 그림 대기 (중앙값 / 최대) | 248초 / 461초 |
+
+결론: 서버 결함 0건. 유일한 실질 문제는 OpenAI 분당 5장 한도 때문에 마지막 학생이 오래 기다리는 것이고, 이는 티어 상향 또는 "모두 1장씩 먼저" 순서 설정으로 줄어듭니다.
 
 ## 시작하기
 
